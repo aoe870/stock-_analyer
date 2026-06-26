@@ -15,6 +15,22 @@ The first version focuses on:
 
 This tool is for research and engineering use only. It does not provide investment advice.
 
+## Version 1 Decisions
+
+These decisions are fixed for the first implementation so worker agents do not need to re-open architecture questions while coding:
+
+- Market scope: A-share daily data only.
+- Data scope: stock list, trading calendar, daily OHLCV bars, adjustment factors, ST status, and suspension/market-open status when the provider supports it.
+- Out of scope for version 1: minute bars, real-time quotes, financial statements, valuation factors, multi-factor ranking, HK/US/ETF expansion, and live trading.
+- Providers: Tushare first when `STOCK_ANALYZER_TUSHARE_TOKEN` is configured; AkShare/Eastmoney fallback; CSV import only for manual repair, tests, and local experiments.
+- Storage: MySQL 8.x is required for the service database.
+- Runtime shape: one FastAPI backend process with logical data-acquisition and analysis subsystems; do not split into separately deployed services in version 1.
+- Scheduler: APScheduler is the default in-process scheduler.
+- Deployment: provide local Windows PowerShell scripts and Docker Compose for MySQL.
+- Price modes: store unadjusted bars and forward-adjusted analysis bars; backtests and screening use `forward_adjusted` by default and clearly mark fallback to `unadjusted`.
+- Failure policy: partial sync success is allowed; screening continues with available symbols and reports missing/failed coverage; backtest requires sufficient coverage unless the request explicitly allows partial coverage.
+- Recompute policy: when daily bars or adjustment factors change, recompute analysis bars, indicators, and signals from 60 trading rows before the earliest changed date through the latest affected date.
+
 ## Product Shape
 
 The application is a local data service plus Web UI:
@@ -42,7 +58,7 @@ In version 1 these are logical subsystems inside one backend application, not tw
 Recommended version 1 runtime:
 
 - One FastAPI application process serving APIs and static UI.
-- One in-process scheduler/background task runner for sync and aggregation jobs.
+- One APScheduler-backed in-process scheduler/background task runner for sync and aggregation jobs.
 - One MySQL database shared by data acquisition and analysis modules.
 
 Future split, when scale requires it:
@@ -128,6 +144,8 @@ Recommended first-version deployment:
 - UTC timestamps for service metadata.
 - Local trading dates stored as `DATE`.
 - Decimal numeric columns for prices and amounts where exact persistence matters.
+
+Local development should include `docker-compose.yml` for MySQL. The application must also support connecting to an existing MySQL instance through environment variables.
 
 ### Core Tables
 
@@ -548,6 +566,25 @@ Provider failures must be visible in sync logs. A run should record which provid
 
 Local MySQL data is the primary source for screening and backtesting. External providers are used by sync jobs, not by normal analysis requests.
 
+### Provider Contract
+
+Each provider adapter must implement a common interface and return normalized Python dictionaries before storage:
+
+- `fetch_stock_universe()`
+- `fetch_trading_calendar(exchange, start_date, end_date)`
+- `fetch_daily_bars(symbol, start_date, end_date)`
+- `fetch_adjustment_factors(symbol, start_date, end_date)`
+- `fetch_stock_status(symbols, trade_date)` when supported
+
+Provider adapters must not write directly to MySQL. They return data to sync services, and sync services own persistence, retry, fallback, and job logging.
+
+Version 1 provider expectations:
+
+- Tushare should be used for the most complete metadata and adjustment-factor path when a token exists.
+- AkShare/Eastmoney should provide a no-token fallback for daily bars and basic metadata, accepting that coverage and field consistency may be weaker.
+- CSV import must reuse the same normalization and validation path as provider data.
+- If providers disagree for the same symbol/date, provider priority decides the canonical row; the losing row may remain in raw payload audit data.
+
 ## Sync Policy
 
 ### Scheduled Jobs
@@ -570,8 +607,10 @@ Incremental sync should:
 - Detect the latest available `trade_date` per symbol.
 - Fetch only missing dates by default.
 - Allow a forced refresh for a date range.
-- Recompute indicators from a warmup window before the first changed date.
+- Recompute analysis rows, indicators, and signals from a warmup window before the first changed date.
 - Mark symbols as skipped when the market was closed, the symbol was not listed, or the provider lacks data.
+
+The warmup window for EXPMA17/50 is 60 trading rows before the earliest changed date. If fewer than 60 prior rows exist, recomputation starts from the first available row and marks early signals as not warmup-ready.
 
 ### Retry and Failure Handling
 
@@ -580,6 +619,7 @@ Incremental sync should:
 - Fall back to the next provider when configured.
 - Record permanent failures with provider, endpoint, symbol, date range, and error message.
 - Keep partial successful data and make coverage visible to the API/UI.
+- A completed sync job may have failed items. Its top-level status should be `completed_with_errors`, not `failed`, when at least one item succeeded.
 
 ## Aggregation and Analysis
 
@@ -609,6 +649,24 @@ Each analysis row should expose a `data_quality` state:
 EXPMA values and strategy signals should be materialized in MySQL after sync. This makes screening fast and lets the UI inspect historical signal state without recalculating every request.
 
 Backtests may still recompute strategy signals in memory for custom strategy parameters. For default EXPMA17/50, they should reuse materialized indicators/signals when possible.
+
+### Recompute Triggers
+
+The aggregation layer must enqueue or run downstream recomputation when these inputs change:
+
+- New or changed `daily_bars`.
+- New or changed `adjustment_factors`.
+- Changed stock status that affects screening filters.
+- Forced refresh over a historical date range.
+
+Recomputation order:
+
+1. Rebuild `analysis_daily_bars`.
+2. Rebuild `daily_indicators`.
+3. Rebuild `strategy_signals`.
+4. Mark affected screening/backtest cached results as stale if they overlap the changed symbol/date range.
+
+Version 1 does not need automatic reruns of old screening or backtest runs. It only needs to mark metadata clearly enough that users can rerun them.
 
 ## Indicator Semantics
 
@@ -819,6 +877,7 @@ scripts/
   deploy_local.ps1
   backup_db.ps1
   restore_db.ps1
+docker-compose.yml
 stock_analyzer_app/
   __main__.py
   config/
@@ -828,6 +887,22 @@ stock_analyzer_app/
 ```
 
 PowerShell scripts are required because the current development environment is Windows. Shell equivalents can be added later if Linux deployment becomes a target.
+
+### Docker Compose
+
+`docker-compose.yml` must provide a local MySQL service for development and repeatable testing.
+
+Required behavior:
+
+- Service name: `mysql`.
+- Image: a MySQL 8.x image.
+- Port mapping: `3306:3306` unless overridden by environment.
+- Database name: `stock_analyzer`.
+- App user: `stock_analyzer`.
+- Persistent named volume for MySQL data.
+- Healthcheck that waits for MySQL readiness.
+
+The application should not require Docker if the user already has MySQL. Docker Compose is the default local bootstrap path, not the only supported deployment mode.
 
 ### Environment Configuration
 
@@ -909,6 +984,7 @@ Seed scripts must use upserts so they can be rerun after deployment.
 - Run migrations.
 - Start the FastAPI app on `http://127.0.0.1:8000`.
 - Leave sync scheduling enabled or disabled based on `STOCK_ANALYZER_SYNC_ENABLED`.
+- Start or validate Docker Compose MySQL when requested by a flag.
 
 Expected usage:
 
@@ -982,6 +1058,18 @@ The health endpoint should report:
 - Scheduler status.
 - Latest successful sync job.
 
+### Scheduler Requirements
+
+APScheduler is the first-version scheduler. It should run inside the FastAPI process unless disabled by configuration.
+
+Scheduler requirements:
+
+- Jobs are declared in code and persisted as durable execution records in `sync_jobs`.
+- The scheduler must not start duplicate daily pipeline jobs if one is already running.
+- Manual API-triggered jobs and scheduled jobs share the same task execution path.
+- The scheduler can be disabled with `STOCK_ANALYZER_SYNC_ENABLED=false`.
+- Default schedule runs after normal A-share market data availability, using `STOCK_ANALYZER_SYNC_TIME` and `STOCK_ANALYZER_TIMEZONE`.
+
 ## Error Handling
 
 Data sync failures:
@@ -995,6 +1083,9 @@ Data coverage failures:
 - Analysis APIs should report missing date ranges instead of silently fetching external data.
 - Screening should mark symbols skipped when required bars or indicators are missing.
 - Backtest creation should fail early if coverage is insufficient for the requested universe/date range, unless the user allows partial coverage.
+- Partial screening is allowed by default. Results must include counts for evaluated, skipped, missing data, and provider/sync errors.
+- Partial backtest is disabled by default. The request must explicitly set `allow_partial_coverage=true` before symbols with incomplete coverage are skipped.
+- Coverage checks must use `analysis_daily_bars`, not raw provider tables.
 
 Insufficient history:
 
@@ -1091,10 +1182,9 @@ Frontend tests:
 These are implementation details, not product blockers:
 
 - Exact charting library: ECharts is a practical default for K-line overlays and signal markers.
-- Exact background task implementation: FastAPI background tasks or APScheduler are enough for version 1; a durable queue can be added later.
 - Whether raw provider payload retention is unlimited or time-limited.
-- Whether MySQL credentials are configured only by environment variables or also editable in the UI.
 - Whether the first release ships as one command or separate backend/frontend commands.
+- Whether sensitive settings are only environment variables in version 1 or can also be edited in the UI with explicit storage protection.
 
 ## Acceptance Criteria
 
@@ -1102,13 +1192,16 @@ The first implemented release is acceptable when:
 
 - The local Web app starts successfully.
 - The backend connects to MySQL and initializes required schema.
+- Docker Compose can start a local MySQL 8.x instance for development.
 - Database migration files, seed files, and PowerShell scripts are present in the required layout.
 - Initialization, migration, seed, local deployment, one-time sync, backup, and restore scripts are documented and runnable.
 - A user can configure data source settings and see provider/token status.
+- APScheduler can run the configured daily pipeline without creating duplicate concurrent jobs.
 - A user can run or schedule stock universe and daily bar synchronization.
 - Sync jobs persist status, summary counts, and symbol-level errors.
 - Aggregation produces analysis-ready daily bars in MySQL.
 - EXPMA17/50 indicators and signals are materialized for synced symbols.
+- Historical data changes recompute analysis rows, indicators, and signals from the required 60-row warmup window.
 - A user can run EXPMA17/50 screening on a synced A-share universe.
 - A user can run a historical EXPMA17/50 backtest with next-day-open execution.
 - Results include metrics, trades, daily equity, signal details, and data coverage metadata.
