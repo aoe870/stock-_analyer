@@ -1,0 +1,2 @@
+"""Local stock analysis application."""
+

@@ -1,0 +1,21 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: stock_analyzer_mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: "${STOCK_ANALYZER_MYSQL_ROOT_PASSWORD:-root-change-me}"
+      MYSQL_DATABASE: "${STOCK_ANALYZER_DB_NAME:-stock_analyzer}"
+      MYSQL_USER: "${STOCK_ANALYZER_DB_USER:-stock_analyzer}"
+      MYSQL_PASSWORD: "${STOCK_ANALYZER_DB_PASSWORD:-change-me}"
+    volumes:
+      - stock_analyzer_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${STOCK_ANALYZER_MYSQL_ROOT_PASSWORD:-root-change-me}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  stock_analyzer_mysql_data:
