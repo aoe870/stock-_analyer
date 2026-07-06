@@ -602,6 +602,23 @@ class MySqlRepository:
         self._executemany(sql, [(row["sector_code"], row.get("provider", "unknown"), row["symbol"], row.get("weight"), _json_text(row.get("raw_json", {}))) for row in rows])
 
     def upsert_latest_sector_quotes(self, rows: list[dict]) -> None:
+        values = [
+            (
+                row["sector_code"],
+                row.get("provider", row.get("source", "unknown")),
+                row.get("quote_time") or row.get("trade_date"),
+                row.get("price") or row.get("close"),
+                row.get("change_amount") or row.get("change"),
+                row.get("change_rate"),
+                row.get("amount"),
+                _json_text(row.get("raw_json", row)),
+            )
+            for row in rows
+        ]
+        if not values:
+            return
+        providers = sorted({value[1] for value in values})
+        placeholders = ",".join(["%s"] * len(providers))
         sql = """
             INSERT INTO latest_sector_quotes
                 (sector_code, provider, quote_time, price, change_amount, change_rate, amount, raw_json)
@@ -610,22 +627,10 @@ class MySqlRepository:
                 quote_time=VALUES(quote_time), price=VALUES(price), change_amount=VALUES(change_amount),
                 change_rate=VALUES(change_rate), amount=VALUES(amount), raw_json=VALUES(raw_json)
         """
-        self._executemany(
-            sql,
-            [
-                (
-                    row["sector_code"],
-                    row.get("provider", row.get("source", "unknown")),
-                    row.get("quote_time") or row.get("trade_date"),
-                    row.get("price") or row.get("close"),
-                    row.get("change_amount") or row.get("change"),
-                    row.get("change_rate"),
-                    row.get("amount"),
-                    _json_text(row.get("raw_json", row)),
-                )
-                for row in rows
-            ],
-        )
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"DELETE FROM latest_sector_quotes WHERE provider IN ({placeholders})", providers)
+                cursor.executemany(sql, values)
 
     def save_raw_provider_payload(
         self,
@@ -880,6 +885,53 @@ class MySqlRepository:
             },
         }
 
+    def _market_dashboard_ranking_date(self) -> str | None:
+        rows = self._select_rows(
+            """
+            SELECT trade_date, COUNT(*) AS row_count
+            FROM analysis_daily_bars
+            WHERE price_mode='forward_adjusted'
+            GROUP BY trade_date
+            ORDER BY trade_date DESC
+            LIMIT 30
+            """
+        )
+        for row in rows:
+            if int(row["row_count"]) >= 20:
+                return row["trade_date"]
+        return rows[0]["trade_date"] if rows else None
+
+    def _stock_rankings_for_date(self, trade_date: str) -> dict[str, list[dict]]:
+        base_sql = """
+            SELECT cur.symbol, COALESCE(s.name, cur.symbol) AS name, cur.trade_date, cur.close, cur.volume, cur.amount,
+                   cur.price_mode, cur.data_quality, (cur.close - prev.close) AS `change`,
+                   ((cur.close / prev.close) - 1) AS change_rate
+            FROM analysis_daily_bars cur
+            JOIN analysis_daily_bars prev
+              ON prev.symbol=cur.symbol
+             AND prev.price_mode=cur.price_mode
+             AND prev.trade_date=(
+                SELECT MAX(p.trade_date)
+                FROM analysis_daily_bars p
+                WHERE p.symbol=cur.symbol
+                  AND p.price_mode=cur.price_mode
+                  AND p.trade_date < cur.trade_date
+             )
+            JOIN stocks s ON s.symbol=cur.symbol
+            WHERE cur.trade_date=%s
+              AND cur.price_mode='forward_adjusted'
+              AND prev.close > 0
+              AND s.is_active=1
+              AND s.symbol REGEXP '^[0-9]{{6}}\\.(SH|SZ|BJ)$'
+            ORDER BY {order_by}
+            LIMIT 20
+        """
+        return {
+            "gainers": self._select_rows(base_sql.format(order_by="change_rate DESC, cur.symbol"), (trade_date,)),
+            "losers": self._select_rows(base_sql.format(order_by="change_rate ASC, cur.symbol"), (trade_date,)),
+            "amount": self._select_rows(base_sql.format(order_by="cur.amount DESC, cur.symbol"), (trade_date,)),
+        }
+
     def market_dashboard_snapshot(self) -> dict:
         indexes = self._select_rows(
             """
@@ -905,30 +957,17 @@ class MySqlRepository:
         )
         if not sectors:
             sectors = self._select_rows("SELECT sector_code, provider, name, market FROM market_sectors ORDER BY name LIMIT 100")
-        ranked = self._select_rows(
-            """
-            SELECT adb.symbol, s.name, adb.trade_date, adb.close, adb.volume, adb.amount, adb.price_mode, adb.data_quality
-            FROM analysis_daily_bars adb
-            JOIN (
-                SELECT symbol, MAX(trade_date) AS trade_date
-                FROM analysis_daily_bars
-                WHERE price_mode='forward_adjusted'
-                GROUP BY symbol
-            ) latest ON latest.symbol=adb.symbol AND latest.trade_date=adb.trade_date
-            LEFT JOIN stocks s ON s.symbol=adb.symbol
-            WHERE adb.price_mode='forward_adjusted'
-            ORDER BY adb.amount DESC
-            LIMIT 20
-            """
-        )
+        ranking_date = self._market_dashboard_ranking_date()
+        rankings = self._stock_rankings_for_date(ranking_date) if ranking_date else {"gainers": [], "losers": [], "amount": []}
         readiness = self.sync_readiness()
         return {
             "indexes": indexes,
             "sectors": sectors,
-            "rankings": {"gainers": [], "losers": [], "amount": ranked},
+            "rankings": rankings,
             "breadth": {"up": 0, "down": 0, "flat": readiness.get("updated_symbols", 0)},
             "freshness": {
                 "latest_trade_date": readiness.get("latest_trade_date"),
+                "ranking_trade_date": ranking_date,
                 "ready_for_analysis": readiness.get("ready_for_analysis", False),
                 "updated_symbols": readiness.get("updated_symbols", 0),
                 "expected_symbols": readiness.get("expected_symbols", 0),

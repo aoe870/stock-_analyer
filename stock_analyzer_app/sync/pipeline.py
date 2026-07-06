@@ -149,7 +149,7 @@ class DailySyncPipeline:
         for provider in self.providers:
             try:
                 index_rows = provider.fetch_index_rankings(sort="changeRate", order="DESC") if hasattr(provider, "fetch_index_rankings") else []
-                sector_rows = provider.fetch_sector_rankings(sort="changeRate", order="DESC") if hasattr(provider, "fetch_sector_rankings") else []
+                sector_rows = provider.fetch_sector_rankings(sort="changeRate", order="DESC", sector_type="industry") if hasattr(provider, "fetch_sector_rankings") else []
                 if index_rows and hasattr(self.repository, "upsert_market_indexes"):
                     self.repository.upsert_market_indexes(index_rows)
                 if sector_rows and hasattr(self.repository, "upsert_market_sectors"):

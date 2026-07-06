@@ -185,10 +185,15 @@ def test_daily_pipeline_persists_local_market_dashboard_quote_snapshots():
             self.sector_quotes = rows
 
     class MarketSnapshotProvider(FakeProvider):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.sector_ranking_requests = []
+
         def fetch_index_rankings(self, sort="changeRate", order="DESC"):
             return [{"index_code": "sh000001", "provider": self.name, "name": "Index", "trade_date": "2024-01-02", "price": 3200, "change_rate": 0.01}]
 
-        def fetch_sector_rankings(self, sort="changeRate", order="DESC"):
+        def fetch_sector_rankings(self, sort="changeRate", order="DESC", sector_type="all"):
+            self.sector_ranking_requests.append({"sort": sort, "order": order, "sector_type": sector_type})
             return [{"sector_code": "BK001", "provider": self.name, "name": "Bank", "trade_date": "2024-01-02", "price": 1000, "change_rate": 0.02}]
 
     repository = RepositoryWithMarketSnapshots()
@@ -202,6 +207,7 @@ def test_daily_pipeline_persists_local_market_dashboard_quote_snapshots():
     assert repository.sectors[0]["sector_code"] == "BK001"
     assert repository.index_quotes[0]["price"] == 3200
     assert repository.sector_quotes[0]["change_rate"] == 0.02
+    assert provider.sector_ranking_requests == [{"sort": "changeRate", "order": "DESC", "sector_type": "industry"}]
 
 
 def test_daily_pipeline_processes_symbols_concurrently_with_configured_workers():

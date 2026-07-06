@@ -343,13 +343,20 @@ def test_mysql_repository_persists_miana_side_data_and_raw_payloads():
 
 def test_mysql_repository_persists_v2_research_and_market_structure_data():
     repo = repository()
-    repo.upsert_stocks([{"symbol": "TST001.SZ", "exchange": "SZ", "name": "Test One", "source": "miana"}])
+    provider = "unit_market_structure"
+    repo._execute("DELETE FROM index_constituents WHERE provider=%s", (provider,))
+    repo._execute("DELETE FROM sector_constituents WHERE provider=%s", (provider,))
+    repo._execute("DELETE FROM latest_index_quotes WHERE provider=%s", (provider,))
+    repo._execute("DELETE FROM latest_sector_quotes WHERE provider=%s", (provider,))
+    repo._execute("DELETE FROM market_indexes WHERE provider=%s", (provider,))
+    repo._execute("DELETE FROM market_sectors WHERE provider=%s", (provider,))
+    repo.upsert_stocks([{"symbol": "TST001.SZ", "exchange": "SZ", "name": "Test One", "source": provider}])
 
     repo.upsert_income_statements(
         [
             {
                 "symbol": "TST001.SZ",
-                "provider": "miana",
+                "provider": provider,
                 "report_date": "2024-12-31",
                 "notice_date": "2025-04-01",
                 "report_period": "2024A",
@@ -369,7 +376,7 @@ def test_mysql_repository_persists_v2_research_and_market_structure_data():
         [
             {
                 "symbol": "TST001.SZ",
-                "provider": "miana",
+                "provider": provider,
                 "report_date": "2024-12-31",
                 "report_period": "2024A",
                 "total_assets": 1000,
@@ -383,7 +390,7 @@ def test_mysql_repository_persists_v2_research_and_market_structure_data():
         [
             {
                 "symbol": "TST001.SZ",
-                "provider": "miana",
+                "provider": provider,
                 "report_date": "2024-12-31",
                 "report_period": "2024A",
                 "net_operating_cashflow": 50,
@@ -395,7 +402,7 @@ def test_mysql_repository_persists_v2_research_and_market_structure_data():
         [
             {
                 "symbol": "TST001.SZ",
-                "provider": "miana",
+                "provider": provider,
                 "report_date": "2024-12-31",
                 "holder_name": "Holder A",
                 "holder_rank": 1,
@@ -405,12 +412,12 @@ def test_mysql_repository_persists_v2_research_and_market_structure_data():
             }
         ]
     )
-    repo.upsert_market_indexes([{"index_code": "sh000001", "provider": "miana", "name": "Index One", "exchange_code": "XSHG", "country_code": "CHN", "raw_json": {}}])
-    repo.upsert_market_sectors([{"sector_code": "BK001", "provider": "miana", "name": "Sector One", "market": "cn_hs", "raw_json": {}}])
-    repo.upsert_latest_index_quotes([{"index_code": "sh000001", "provider": "miana", "trade_date": "2024-01-02", "price": 3200, "change_rate": 0.01, "amount": 1000, "raw_json": {}}])
-    repo.upsert_latest_sector_quotes([{"sector_code": "BK001", "provider": "miana", "trade_date": "2024-01-02", "price": 1000, "change_rate": 0.02, "amount": 800, "raw_json": {}}])
-    repo.upsert_index_constituents([{"index_code": "sh000001", "provider": "miana", "symbol": "TST001.SZ", "weight": 1.2, "raw_json": {}}])
-    repo.upsert_sector_constituents([{"sector_code": "BK001", "provider": "miana", "symbol": "TST001.SZ", "weight": 2.3, "raw_json": {}}])
+    repo.upsert_market_indexes([{"index_code": "sh000001", "provider": provider, "name": "Index One", "exchange_code": "XSHG", "country_code": "CHN", "raw_json": {}}])
+    repo.upsert_market_sectors([{"sector_code": "BK001", "provider": provider, "name": "Sector One", "market": "cn_hs", "raw_json": {}}])
+    repo.upsert_latest_index_quotes([{"index_code": "sh000001", "provider": provider, "trade_date": "2024-01-02", "price": 3200, "change_rate": 9.99, "amount": 1000, "raw_json": {}}])
+    repo.upsert_latest_sector_quotes([{"sector_code": "BK001", "provider": provider, "trade_date": "2024-01-02", "price": 1000, "change_rate": 9.99, "amount": 800, "raw_json": {}}])
+    repo.upsert_index_constituents([{"index_code": "sh000001", "provider": provider, "symbol": "TST001.SZ", "weight": 1.2, "raw_json": {}}])
+    repo.upsert_sector_constituents([{"sector_code": "BK001", "provider": provider, "symbol": "TST001.SZ", "weight": 2.3, "raw_json": {}}])
 
     financials = repo.stock_financials("TST001.SZ")
     coverage = repo.data_center_coverage()
@@ -425,4 +432,132 @@ def test_mysql_repository_persists_v2_research_and_market_structure_data():
     assert dashboard["indexes"][0]["index_code"] == "sh000001"
     assert dashboard["indexes"][0]["price"] == 3200.0
     assert dashboard["sectors"][0]["sector_code"] == "BK001"
-    assert dashboard["sectors"][0]["change_rate"] == 0.02
+    assert dashboard["sectors"][0]["change_rate"] == 9.99
+    repo._execute("DELETE FROM index_constituents WHERE provider=%s", (provider,))
+    repo._execute("DELETE FROM sector_constituents WHERE provider=%s", (provider,))
+    repo._execute("DELETE FROM latest_index_quotes WHERE provider=%s", (provider,))
+    repo._execute("DELETE FROM latest_sector_quotes WHERE provider=%s", (provider,))
+    repo._execute("DELETE FROM market_indexes WHERE provider=%s", (provider,))
+    repo._execute("DELETE FROM market_sectors WHERE provider=%s", (provider,))
+
+
+def test_latest_sector_quotes_replace_previous_provider_snapshot():
+    repo = repository()
+    provider = "unit_sector_snapshot"
+    repo._execute("DELETE FROM latest_sector_quotes WHERE provider=%s", (provider,))
+    repo._execute("DELETE FROM market_sectors WHERE provider=%s", (provider,))
+
+    repo.upsert_market_sectors(
+        [
+            {"sector_code": "THEME001", "provider": provider, "name": "2025三季报扭亏", "market": "cn_hs", "raw_json": {}},
+            {"sector_code": "BK001", "provider": provider, "name": "银行", "market": "cn_hs", "raw_json": {}},
+        ]
+    )
+    repo.upsert_latest_sector_quotes(
+        [
+            {
+                "sector_code": "THEME001",
+                "provider": provider,
+                "trade_date": "2024-01-01",
+                "price": 1000,
+                "change_rate": 0.99,
+                "amount": 100,
+                "raw_json": {},
+            }
+        ]
+    )
+
+    repo.upsert_latest_sector_quotes(
+        [
+            {
+                "sector_code": "BK001",
+                "provider": provider,
+                "trade_date": "2024-01-02",
+                "price": 1000,
+                "change_rate": 0.01,
+                "amount": 100,
+                "raw_json": {},
+            }
+        ]
+    )
+
+    sectors = repo.market_dashboard_snapshot()["sectors"]
+
+    assert any(row["sector_code"] == "BK001" for row in sectors)
+    assert all(row["sector_code"] != "THEME001" for row in sectors)
+
+
+def test_market_dashboard_builds_stock_rankings_from_latest_complete_analysis_date():
+    repo = repository()
+    symbols = [f"990{i:03d}.SZ" for i in range(1, 26)]
+    repo.clear_test_data(symbols)
+    repo.upsert_stocks(
+        [
+            {"symbol": symbol, "exchange": "SZ", "name": f"Rank {index}", "source": "unit"}
+            for index, symbol in enumerate(symbols, start=1)
+        ]
+    )
+
+    rows = []
+    for index, symbol in enumerate(symbols, start=1):
+        current_close = 10 + index
+        if index == 1:
+            current_close = 15
+        if index == 2:
+            current_close = 8
+        rows.extend(
+            [
+                {
+                    "symbol": symbol,
+                    "trade_date": "2099-01-02",
+                    "open": 10,
+                    "high": 10,
+                    "low": 10,
+                    "close": 10,
+                    "volume": 100,
+                    "amount": 1000,
+                    "price_mode": "forward_adjusted",
+                    "source": "unit",
+                    "data_quality": "ok",
+                },
+                {
+                    "symbol": symbol,
+                    "trade_date": "2099-01-03",
+                    "open": current_close,
+                    "high": current_close,
+                    "low": current_close,
+                    "close": current_close,
+                    "volume": 100 + index,
+                    "amount": 1000 + index,
+                    "price_mode": "forward_adjusted",
+                    "source": "unit",
+                    "data_quality": "ok",
+                },
+            ]
+        )
+    rows.append(
+        {
+            "symbol": symbols[0],
+            "trade_date": "2099-01-04",
+            "open": 16,
+            "high": 16,
+            "low": 16,
+            "close": 16,
+            "volume": 1,
+            "amount": 1,
+            "price_mode": "forward_adjusted",
+            "source": "unit",
+            "data_quality": "ok",
+        }
+    )
+    repo.upsert_analysis_daily_bars(rows)
+
+    rankings = repo.market_dashboard_snapshot()["rankings"]
+
+    assert rankings["gainers"][0]["symbol"] == symbols[-1]
+    assert rankings["gainers"][0]["trade_date"] == "2099-01-03"
+    assert rankings["gainers"][0]["change_rate"] == 2.5
+    assert rankings["losers"][0]["symbol"] == symbols[1]
+    assert rankings["losers"][0]["change_rate"] == -0.2
+    assert rankings["amount"][0]["trade_date"] == "2099-01-03"
+    repo.clear_test_data(symbols)
