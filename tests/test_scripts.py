@@ -40,10 +40,70 @@ def test_docker_compose_declares_mysql_8_service():
     content = Path("docker-compose.yml").read_text(encoding="utf-8")
 
     assert "mysql:" in content
+    assert "app:" in content
+    assert "build:" in content
     assert "mysql:8" in content
     assert "stock_analyzer" in content
     assert "3306:3306" in content
+    assert "8000:8000" in content
     assert "healthcheck:" in content
+    assert "condition: service_healthy" in content
+
+
+def test_linux_and_windows_docker_deploy_entrypoints_exist():
+    linux = Path("deploy.sh")
+    windows = Path("deploy.ps1")
+
+    assert linux.exists()
+    assert windows.exists()
+
+    linux_content = linux.read_text(encoding="utf-8")
+    windows_content = windows.read_text(encoding="utf-8")
+
+    for expected in ["docker compose", "up -d mysql", "migrate", "seed", "up -d app", "/api/health"]:
+        assert expected in linux_content
+    for expected in ["docker compose", "up -d mysql", "migrate", "seed", "up -d app", "/api/health"]:
+        assert expected in windows_content
+
+
+def test_dockerfile_packages_application_for_linux_compose():
+    dockerfile = Path("Dockerfile")
+    dockerignore = Path(".dockerignore")
+    env_example = Path(".env.example")
+
+    assert dockerfile.exists()
+    assert dockerignore.exists()
+    assert env_example.exists()
+
+    content = dockerfile.read_text(encoding="utf-8")
+    assert "python:3.12-slim" in content
+    assert "requirements.txt" in content
+    assert "stock_analyzer_app" in content
+    assert "public" in content
+    assert "EXPOSE 8000" in content
+    assert "python" in content and "-m" in content and "stock_analyzer_app" in content
+
+    ignored = dockerignore.read_text(encoding="utf-8")
+    for pattern in [".venv", "logs", ".git", "__pycache__", "dist"]:
+        assert pattern in ignored
+
+    env_text = env_example.read_text(encoding="utf-8")
+    for key in [
+        "STOCK_ANALYZER_DB_HOST=mysql",
+        "STOCK_ANALYZER_DB_NAME=stock_analyzer",
+        "STOCK_ANALYZER_DB_USER=stock_analyzer",
+        "STOCK_ANALYZER_SYNC_TIME=00:00",
+        "STOCK_ANALYZER_MIANA_TOKEN=",
+    ]:
+        assert key in env_text
+
+
+def test_container_entrypoint_binds_all_interfaces():
+    content = Path("stock_analyzer_app/__main__.py").read_text(encoding="utf-8")
+
+    assert "STOCK_ANALYZER_HOST" in content
+    assert "0.0.0.0" in content
+    assert "STOCK_ANALYZER_PORT" in content
 
 
 def test_migration_script_tracks_checksums_and_refuses_changed_migrations():

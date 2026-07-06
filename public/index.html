@@ -1,48 +1,22 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Stock Analyzer Workspace</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <title>StockInsight 股票分析平台</title>
+    <style>
+      [v-cloak] { display: none !important; }
+    </style>
+    <link rel="stylesheet" href="/static/vendor/element-plus.css?v=20260705" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260705" />
   </head>
   <body>
-    <div id="app-shell" class="workspace">
-      <aside class="sidebar">
-        <div class="brand">
-          <span class="brand-mark">EA</span>
-          <div>
-            <strong>EXPMA Analyzer</strong>
-            <span>Local A-share research</span>
-          </div>
-        </div>
-        <nav class="nav-list" aria-label="Workspace">
-          <a href="#/dashboard" data-route="dashboard">Dashboard</a>
-          <a href="#/sync" data-route="sync">Sync Center</a>
-          <a href="#/stocks" data-route="stocks">Stocks</a>
-          <a href="#/screening" data-route="screening">Screening</a>
-          <a href="#/backtests" data-route="backtests">Backtests</a>
-          <a href="#/stock-detail" data-route="stock-detail">Stock Detail</a>
-          <a href="#/settings" data-route="settings">Settings</a>
-        </nav>
-      </aside>
+    <div id="app" v-cloak></div>
+    <noscript>请启用 JavaScript 后使用 StockInsight 股票分析平台。</noscript>
 
-      <div class="main-shell">
-        <header class="topbar">
-          <div>
-            <h1 id="page-title">Dashboard</h1>
-            <p id="page-subtitle">Local data service status and analysis coverage.</p>
-          </div>
-          <div class="top-actions">
-            <span id="api-status" class="status-pill">checking</span>
-            <button id="refresh-view" type="button">Refresh</button>
-          </div>
-        </header>
-
-        <main id="view-root" class="view-root" tabindex="-1"></main>
-      </div>
-    </div>
-
-    <script src="/static/app.js"></script>
+    <script src="/static/vendor/vue.global.prod.js?v=20260705"></script>
+    <script src="/static/vendor/element-plus.full.min.js?v=20260705"></script>
+    <script src="/static/vendor/echarts.min.js?v=20260705"></script>
+    <script src="/static/app.js?v=20260705"></script>
   </body>
 </html>

@@ -156,6 +156,37 @@ def test_mysql_repository_materialized_indicators_and_signals_feed_screening_row
     assert rows[0]["expma17"] == 10.5
 
 
+def test_mysql_repository_bars_falls_back_to_unadjusted_rows_for_detail_view():
+    repo = repository()
+    repo.upsert_stocks(
+        [{"symbol": "TST001.SZ", "exchange": "SZ", "name": "Test One", "source": "unit"}]
+    )
+    repo.upsert_analysis_daily_bars(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "trade_date": "2024-01-02",
+                "open": 10,
+                "high": 12,
+                "low": 9,
+                "close": 11,
+                "volume": 1000,
+                "amount": 11000,
+                "adj_factor": None,
+                "price_mode": "unadjusted",
+                "source": "unit",
+                "data_quality": "missing_adj_factor",
+            }
+        ]
+    )
+
+    bars = repo.bars("TST001.SZ")
+
+    assert len(bars) == 1
+    assert bars[0]["price_mode"] == "unadjusted"
+    assert bars[0]["data_quality"] == "missing_adj_factor"
+
+
 def test_mysql_repository_persists_sync_jobs_and_items():
     repo = repository()
 
@@ -202,3 +233,196 @@ def test_mysql_repository_upserts_trading_calendar_and_stock_status():
         {"symbol": "TST001.SZ", "trade_date": "2024-01-02", "is_st": True, "is_suspended": False},
         {"symbol": "TST002.SZ", "trade_date": "2024-01-02", "is_st": False, "is_suspended": True},
     ]
+
+
+def test_mysql_repository_persists_miana_side_data_and_raw_payloads():
+    repo = repository()
+    repo.upsert_stocks([{"symbol": "TST001.SZ", "exchange": "SZ", "name": "Test One", "source": "miana"}])
+
+    repo.upsert_stock_provider_profiles(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": "miana",
+                "provider_symbol": "szTST001",
+                "exchange": "SZ",
+                "name": "Test One",
+                "industry": "Software",
+                "country_code": "CHN",
+                "exchange_code": "XSHE",
+                "market": "cn_hsj",
+                "type": "STOCK",
+                "is_active": True,
+                "is_st": False,
+                "raw_json": {"code": "TST001", "name": "Test One"},
+            }
+        ]
+    )
+    repo.upsert_stock_company_profiles(
+        [{"symbol": "TST001.SZ", "provider": "miana", "industry": "Software", "region": "SZ", "raw_json": {"industry": "Software"}}]
+    )
+    repo.upsert_corporate_actions(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": "miana",
+                "action_type": "dividend",
+                "currency": "CNY",
+                "dividend": 1.23,
+                "split_factor": None,
+                "notice_date": "2024-05-01",
+                "report_date": "2023",
+                "equity_record_date": "2024-05-10",
+                "ex_dividend_date": "2024-05-11",
+                "pay_cash_date": "2024-05-12",
+                "raw_json": {"type": "dividend"},
+            }
+        ]
+    )
+    repo.upsert_share_capital_history(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": "miana",
+                "end_date": "2024-01-01",
+                "total_shares": 1000,
+                "floating_shares": 900,
+                "limited_shares": 100,
+                "change_reason": "initial",
+                "raw_json": {"totalShares": 1000},
+            }
+        ]
+    )
+    repo.upsert_daily_money_flow(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": "miana",
+                "trade_date": "2024-01-02",
+                "amount": 10000,
+                "main_net_inflow_amount": 500,
+                "main_net_ratio": 0.05,
+                "super_large_inflow": 1000,
+                "super_large_outflow": 500,
+                "raw_json": {"amount": 10000},
+            }
+        ]
+    )
+    repo.save_raw_provider_payload(
+        provider="miana",
+        endpoint="/api/stock/v2/kline",
+        payload={"msg": "ok", "data": [{"price": 10}]},
+        symbol="TST001.SZ",
+        date_start="2024-01-01",
+        date_end="2024-01-02",
+        request_params={"symbol": "szTST001", "fq": "qfq"},
+    )
+
+    with repo.connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT provider_symbol, industry FROM stock_provider_profiles WHERE symbol=%s AND provider=%s", ("TST001.SZ", "miana"))
+            assert cursor.fetchone() == {"provider_symbol": "szTST001", "industry": "Software"}
+            cursor.execute("SELECT industry FROM stock_company_profiles WHERE symbol=%s AND provider=%s", ("TST001.SZ", "miana"))
+            assert cursor.fetchone()["industry"] == "Software"
+            cursor.execute("SELECT action_type, dividend FROM corporate_actions WHERE symbol=%s AND provider=%s", ("TST001.SZ", "miana"))
+            action = cursor.fetchone()
+            assert action["action_type"] == "dividend"
+            assert float(action["dividend"]) == 1.23
+            cursor.execute("SELECT total_shares FROM share_capital_history WHERE symbol=%s AND provider=%s", ("TST001.SZ", "miana"))
+            assert float(cursor.fetchone()["total_shares"]) == 1000
+            cursor.execute("SELECT amount, main_net_inflow_amount FROM daily_money_flow WHERE symbol=%s AND provider=%s", ("TST001.SZ", "miana"))
+            flow = cursor.fetchone()
+            assert float(flow["amount"]) == 10000
+            assert float(flow["main_net_inflow_amount"]) == 500
+            cursor.execute("SELECT request_params_json, date_start, date_end FROM raw_provider_payloads WHERE provider=%s AND symbol=%s", ("miana", "TST001.SZ"))
+            raw = cursor.fetchone()
+            assert raw["date_start"].isoformat() == "2024-01-01"
+            assert raw["date_end"].isoformat() == "2024-01-02"
+            assert '"fq": "qfq"' in raw["request_params_json"]
+
+
+def test_mysql_repository_persists_v2_research_and_market_structure_data():
+    repo = repository()
+    repo.upsert_stocks([{"symbol": "TST001.SZ", "exchange": "SZ", "name": "Test One", "source": "miana"}])
+
+    repo.upsert_income_statements(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": "miana",
+                "report_date": "2024-12-31",
+                "notice_date": "2025-04-01",
+                "report_period": "2024A",
+                "currency": "CNY",
+                "revenue": 100,
+                "operating_revenue": 90,
+                "operating_profit": 30,
+                "total_profit": 28,
+                "net_profit": 20,
+                "net_profit_parent": 18,
+                "eps": 1.2,
+                "raw_json": {"revenue": 100},
+            }
+        ]
+    )
+    repo.upsert_balance_sheets(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": "miana",
+                "report_date": "2024-12-31",
+                "report_period": "2024A",
+                "total_assets": 1000,
+                "total_liabilities": 400,
+                "total_equity": 600,
+                "raw_json": {"totalAssets": 1000},
+            }
+        ]
+    )
+    repo.upsert_cashflow_statements(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": "miana",
+                "report_date": "2024-12-31",
+                "report_period": "2024A",
+                "net_operating_cashflow": 50,
+                "raw_json": {"netOperatingCashflow": 50},
+            }
+        ]
+    )
+    repo.upsert_stock_top10_holders(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": "miana",
+                "report_date": "2024-12-31",
+                "holder_name": "Holder A",
+                "holder_rank": 1,
+                "hold_volume": 100,
+                "hold_ratio": 5.5,
+                "raw_json": {"name": "Holder A"},
+            }
+        ]
+    )
+    repo.upsert_market_indexes([{"index_code": "sh000001", "provider": "miana", "name": "Index One", "exchange_code": "XSHG", "country_code": "CHN", "raw_json": {}}])
+    repo.upsert_market_sectors([{"sector_code": "BK001", "provider": "miana", "name": "Sector One", "market": "cn_hs", "raw_json": {}}])
+    repo.upsert_latest_index_quotes([{"index_code": "sh000001", "provider": "miana", "trade_date": "2024-01-02", "price": 3200, "change_rate": 0.01, "amount": 1000, "raw_json": {}}])
+    repo.upsert_latest_sector_quotes([{"sector_code": "BK001", "provider": "miana", "trade_date": "2024-01-02", "price": 1000, "change_rate": 0.02, "amount": 800, "raw_json": {}}])
+    repo.upsert_index_constituents([{"index_code": "sh000001", "provider": "miana", "symbol": "TST001.SZ", "weight": 1.2, "raw_json": {}}])
+    repo.upsert_sector_constituents([{"sector_code": "BK001", "provider": "miana", "symbol": "TST001.SZ", "weight": 2.3, "raw_json": {}}])
+
+    financials = repo.stock_financials("TST001.SZ")
+    coverage = repo.data_center_coverage()
+    dashboard = repo.market_dashboard_snapshot()
+
+    assert financials["income"][0]["revenue"] == 100.0
+    assert financials["balance"][0]["total_assets"] == 1000.0
+    assert financials["cashflow"][0]["net_operating_cashflow"] == 50.0
+    assert coverage["research"]["financial_statements"]["rows"] >= 3
+    assert coverage["research"]["holders"]["rows"] >= 1
+    assert coverage["market_structure"]["indexes"]["rows"] >= 1
+    assert dashboard["indexes"][0]["index_code"] == "sh000001"
+    assert dashboard["indexes"][0]["price"] == 3200.0
+    assert dashboard["sectors"][0]["sector_code"] == "BK001"
+    assert dashboard["sectors"][0]["change_rate"] == 0.02

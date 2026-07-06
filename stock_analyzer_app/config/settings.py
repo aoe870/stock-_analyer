@@ -1,5 +1,8 @@
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 
 @dataclass(frozen=True)
@@ -20,9 +23,17 @@ class AppSettings:
     sync_time: str
     timezone: str
     log_level: str
+    miana_token: str = ""
+    miana_base_url: str = "https://miana.com.cn/api"
+    sync_max_workers: int = 8
+    miana_max_requests_per_minute: int = 500
+    sync_retry_max_workers: int = 4
+    sync_retry_rounds: int = 3
+    sync_include_optional_metadata: bool = False
 
     @classmethod
     def from_env(cls) -> "AppSettings":
+        load_dotenv(dotenv_path=Path.cwd() / ".env")
         priority = [
             item.strip()
             for item in os.getenv("STOCK_ANALYZER_PROVIDER_PRIORITY", "tushare,akshare,eastmoney").split(",")
@@ -38,9 +49,15 @@ class AppSettings:
             ),
             provider_priority=priority,
             tushare_token=os.getenv("STOCK_ANALYZER_TUSHARE_TOKEN", ""),
+            miana_token=os.getenv("STOCK_ANALYZER_MIANA_TOKEN", ""),
+            miana_base_url=os.getenv("STOCK_ANALYZER_MIANA_BASE_URL", "https://miana.com.cn/api"),
+            sync_max_workers=int(os.getenv("STOCK_ANALYZER_SYNC_MAX_WORKERS", "8")),
+            miana_max_requests_per_minute=int(os.getenv("STOCK_ANALYZER_MIANA_MAX_REQUESTS_PER_MINUTE", "500")),
+            sync_retry_max_workers=int(os.getenv("STOCK_ANALYZER_SYNC_RETRY_MAX_WORKERS", "4")),
+            sync_retry_rounds=int(os.getenv("STOCK_ANALYZER_SYNC_RETRY_ROUNDS", "3")),
+            sync_include_optional_metadata=os.getenv("STOCK_ANALYZER_SYNC_INCLUDE_OPTIONAL_METADATA", "false").lower() in {"1", "true", "yes"},
             sync_enabled=os.getenv("STOCK_ANALYZER_SYNC_ENABLED", "true").lower() not in {"0", "false", "no"},
-            sync_time=os.getenv("STOCK_ANALYZER_SYNC_TIME", "18:30"),
+            sync_time=os.getenv("STOCK_ANALYZER_SYNC_TIME", "00:00"),
             timezone=os.getenv("STOCK_ANALYZER_TIMEZONE", "Asia/Shanghai"),
             log_level=os.getenv("STOCK_ANALYZER_LOG_LEVEL", "INFO"),
         )
-

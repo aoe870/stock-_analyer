@@ -1,5 +1,7 @@
 from pathlib import Path
 from typing import Any
+from datetime import date, datetime, timedelta, timezone
+import threading
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,6 +36,7 @@ class RuntimeState:
         self.backtest_tasks: dict[str, dict] = {}
         self.backtest_runs: list[dict] = []
         self.scheduler_service: SchedulerService | None = None
+        self.dashboard_sync_lock = threading.Lock()
         self.configure_repositories()
 
     def configure_repositories(self) -> None:
@@ -61,7 +64,12 @@ class RuntimeState:
         return providers or [DemoAshareProvider()]
 
     def make_daily_pipeline(self) -> DailySyncPipeline:
-        return DailySyncPipeline(self.sync_repository, self.build_sync_providers())
+        return DailySyncPipeline(
+            self.sync_repository,
+            self.build_sync_providers(),
+            max_workers=self.settings.sync_max_workers,
+            include_optional_metadata=self.settings.sync_include_optional_metadata,
+        )
 
 
 runtime = RuntimeState()
@@ -136,6 +144,11 @@ def create_app() -> FastAPI:
             "tushare_token_configured": bool(runtime.settings.tushare_token),
             "sync_enabled": runtime.settings.sync_enabled,
             "sync_time": runtime.settings.sync_time,
+            "sync_max_workers": runtime.settings.sync_max_workers,
+            "sync_retry_max_workers": runtime.settings.sync_retry_max_workers,
+            "sync_retry_rounds": runtime.settings.sync_retry_rounds,
+            "sync_include_optional_metadata": runtime.settings.sync_include_optional_metadata,
+            "miana_max_requests_per_minute": runtime.settings.miana_max_requests_per_minute,
             "fee_rate": 0.0003,
             "slippage_rate": 0.0005,
             "default_price_mode": "forward_adjusted",
@@ -162,10 +175,21 @@ def create_app() -> FastAPI:
     @app.post("/api/sync/jobs")
     def create_sync_job(request: SyncJobRequest) -> dict[str, Any]:
         if request.job_type == "full_daily_pipeline":
+            active = _active_sync_job("full_daily_pipeline")
+            if active:
+                return {**active, "task_id": str(active["id"])}
             pipeline = runtime.make_daily_pipeline()
             start_date = request.start_date or "2024-01-01"
             end_date = request.end_date or "2024-12-31"
             job = pipeline.run_full_daily_pipeline(start_date=start_date, end_date=end_date, requested_by="manual", symbols=request.symbols or None)
+            return {**job, "task_id": str(job["id"])}
+        if request.job_type == "fundamental_refresh_pipeline":
+            pipeline = runtime.make_daily_pipeline()
+            job = pipeline.run_fundamental_refresh_pipeline(requested_by="manual", symbols=request.symbols or None)
+            return {**job, "task_id": str(job["id"])}
+        if request.job_type == "market_structure_pipeline":
+            pipeline = runtime.make_daily_pipeline()
+            job = pipeline.run_market_structure_pipeline(requested_by="manual")
             return {**job, "task_id": str(job["id"])}
         job = runtime.sync_repository.create_job(request.job_type, "manual", runtime.settings.provider_priority)
         runtime.sync_repository.mark_job_running(job["id"])
@@ -207,10 +231,23 @@ def create_app() -> FastAPI:
     @app.post("/api/sync/jobs/{job_id}/retry")
     def retry_sync_job(job_id: int) -> dict[str, Any]:
         try:
-            runtime.sync_repository.get_job(job_id)
+            source_job = runtime.sync_repository.get_job(job_id)
         except (KeyError, AttributeError):
             raise HTTPException(status_code=404, detail="sync job not found")
-        return {"task_id": str(job_id), "status": "retry_queued"}
+        retry_request = _failed_retry_request(job_id)
+        if not retry_request["symbols"]:
+            raise HTTPException(status_code=409, detail="sync job has no failed items to retry")
+        active = _active_sync_job(source_job["job_type"])
+        if active:
+            return {**active, "task_id": str(active["id"]), "retry_deferred_from_job_id": job_id}
+        pipeline = runtime.make_daily_pipeline()
+        job = pipeline.run_full_daily_pipeline(
+            start_date=retry_request["start_date"],
+            end_date=retry_request["end_date"],
+            requested_by=f"retry:{job_id}",
+            symbols=retry_request["symbols"],
+        )
+        return {**job, "task_id": str(job["id"]), "retried_from_job_id": job_id}
 
     @app.get("/api/sync/coverage")
     def sync_coverage() -> dict[str, Any]:
@@ -221,6 +258,65 @@ def create_app() -> FastAPI:
             "analysis_daily_bars": {"symbols": len(runtime.analysis_repository.rows), "rows": rows, "price_mode": "forward_adjusted"},
             "daily_indicators": {"rows": rows},
             "strategy_signals": {"rows": rows},
+        }
+
+    @app.get("/api/sync/readiness")
+    def sync_readiness() -> dict[str, Any]:
+        return _sync_readiness()
+
+    @app.get("/api/market/dashboard")
+    def market_dashboard() -> dict[str, Any]:
+        _ensure_yesterday_data_for_dashboard()
+        if hasattr(runtime.analysis_repository, "market_dashboard_snapshot"):
+            return _enrich_market_dashboard(runtime.analysis_repository.market_dashboard_snapshot())
+        readiness = _sync_readiness()
+        rows = runtime.analysis_repository.latest_screening_rows("9999-12-31")
+        ranked = sorted(rows, key=lambda row: float(row.get("amount") or 0), reverse=True)[:20]
+        return _enrich_market_dashboard({
+            "indexes": [],
+            "sectors": [],
+            "rankings": {
+                "gainers": [],
+                "losers": [],
+                "amount": ranked,
+            },
+            "breadth": {
+                "up": 0,
+                "down": 0,
+                "flat": len(rows),
+            },
+            "freshness": {
+                "latest_trade_date": readiness.get("latest_trade_date"),
+                "ready_for_analysis": readiness.get("ready_for_analysis", False),
+                "updated_symbols": readiness.get("updated_symbols", 0),
+                "expected_symbols": readiness.get("expected_symbols", 0),
+            },
+        })
+
+    @app.get("/api/data-center/coverage")
+    def data_center_coverage() -> dict[str, Any]:
+        if hasattr(runtime.analysis_repository, "data_center_coverage"):
+            return runtime.analysis_repository.data_center_coverage()
+        coverage = sync_coverage()
+        readiness = _sync_readiness()
+        return {
+            "core": coverage,
+            "research": {
+                "financial_statements": {"symbols": 0, "rows": 0},
+                "capital_flow": {"symbols": 0, "rows": 0},
+                "company_profiles": {"symbols": 0, "rows": 0},
+                "holders": {"symbols": 0, "rows": 0},
+            },
+            "market_structure": {
+                "indexes": {"rows": 0},
+                "sectors": {"rows": 0},
+                "index_constituents": {"rows": 0},
+                "sector_constituents": {"rows": 0},
+            },
+            "sync": {
+                "readiness": readiness,
+                "jobs": _list_sync_jobs()[:10],
+            },
         }
 
     @app.get("/api/stocks")
@@ -234,8 +330,52 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="stock not found")
         return stock
 
+    @app.get("/api/stocks/{symbol}/overview")
+    def stock_overview(symbol: str) -> dict[str, Any]:
+        if hasattr(runtime.analysis_repository, "stock_research_snapshot"):
+            return runtime.analysis_repository.stock_research_snapshot(symbol)
+        stock = next((row for row in runtime.analysis_repository.list_stocks() if row["symbol"] == symbol), None)
+        if not stock:
+            raise HTTPException(status_code=404, detail="stock not found")
+        bars = runtime.analysis_repository.bars(symbol)
+        latest_bar = bars[-1] if bars else None
+        return {
+            "stock": stock,
+            "latest_bar": latest_bar,
+            "company_profile": None,
+            "share_capital": [],
+            "corporate_actions": [],
+            "data_quality": {
+                "has_bars": bool(bars),
+                "has_research_data": False,
+            },
+        }
+
+    @app.get("/api/stocks/{symbol}/financials")
+    def stock_financials(symbol: str) -> dict[str, Any]:
+        if hasattr(runtime.analysis_repository, "stock_financials"):
+            return runtime.analysis_repository.stock_financials(symbol)
+        return {"symbol": symbol, "income": [], "balance": [], "cashflow": []}
+
+    @app.get("/api/stocks/{symbol}/capital-flow")
+    def stock_capital_flow(symbol: str) -> dict[str, Any]:
+        if hasattr(runtime.analysis_repository, "stock_capital_flow"):
+            return runtime.analysis_repository.stock_capital_flow(symbol)
+        return {"symbol": symbol, "rows": []}
+
     @app.get("/api/stocks/{symbol}/bars")
-    def stock_bars(symbol: str) -> list[dict]:
+    def stock_bars(symbol: str, refresh: bool = False) -> list[dict]:
+        if refresh:
+            today = date.today().isoformat()
+            existing_bars = runtime.analysis_repository.bars(symbol)
+            latest_trade_date = max((str(row["trade_date"]) for row in existing_bars), default=None)
+            start_date = (date.fromisoformat(latest_trade_date) + timedelta(days=1)).isoformat() if latest_trade_date else today
+            runtime.make_daily_pipeline().run_full_daily_pipeline(
+                start_date=start_date,
+                end_date=today,
+                requested_by=f"detail:{symbol}",
+                symbols=[symbol],
+            )
         return runtime.analysis_repository.bars(symbol)
 
     @app.get("/api/stocks/{symbol}/indicators")
@@ -402,6 +542,128 @@ def _list_sync_jobs() -> list[dict]:
     return sorted(runtime.sync_repository.jobs.values(), key=lambda item: item["id"], reverse=True)
 
 
+def _active_sync_job(job_type: str) -> dict | None:
+    for job in _list_sync_jobs():
+        if job["job_type"] == job_type and job["status"] in {"pending", "running"} and _job_has_recent_activity(job):
+            return job
+    return None
+
+
+def _failed_retry_request(job_id: int) -> dict[str, Any]:
+    if not hasattr(runtime.sync_repository, "get_job_items"):
+        return {"symbols": [], "start_date": None, "end_date": None}
+    failed_items = [
+        item
+        for item in runtime.sync_repository.get_job_items(job_id)
+        if item.get("status") == "failed" and item.get("symbol")
+    ]
+    symbols = sorted({item["symbol"] for item in failed_items})
+    start_dates = [str(item["date_start"]) for item in failed_items if item.get("date_start")]
+    end_dates = [str(item["date_end"]) for item in failed_items if item.get("date_end")]
+    return {
+        "symbols": symbols,
+        "start_date": min(start_dates) if start_dates else "2024-01-01",
+        "end_date": max(end_dates) if end_dates else "2024-12-31",
+    }
+
+
+def _sync_readiness() -> dict[str, Any]:
+    if hasattr(runtime.analysis_repository, "sync_readiness"):
+        return runtime.analysis_repository.sync_readiness()
+    stocks = runtime.analysis_repository.list_stocks()
+    expected_symbols = sorted({stock["symbol"] for stock in stocks if stock.get("is_active", True)})
+    rows = runtime.analysis_repository.latest_screening_rows("9999-12-31", symbols=expected_symbols or None)
+    latest_trade_date = max((str(row["trade_date"]) for row in rows), default=None)
+    updated_symbols = sorted({row["symbol"] for row in rows if latest_trade_date and str(row["trade_date"]) == latest_trade_date})
+    updated_symbol_set = set(updated_symbols)
+    missing_symbols = [symbol for symbol in expected_symbols if symbol not in updated_symbol_set]
+    latest_job = next((job for job in _list_sync_jobs() if job.get("job_type") == "full_daily_pipeline"), None)
+    failed_symbols: list[str] = []
+    if latest_job and hasattr(runtime.sync_repository, "get_job_items"):
+        failed_symbols = sorted(
+            {
+                item["symbol"]
+                for item in runtime.sync_repository.get_job_items(latest_job["id"])
+                if item.get("status") == "failed" and item.get("symbol")
+            }
+        )
+    return {
+        "latest_trade_date": latest_trade_date,
+        "expected_symbols": len(expected_symbols),
+        "updated_symbols": len(updated_symbols),
+        "missing_symbol_count": len(missing_symbols),
+        "missing_symbols": missing_symbols,
+        "failed_symbol_count": len(failed_symbols),
+        "failed_symbols": failed_symbols,
+        "latest_sync_job": latest_job,
+        "ready_for_analysis": bool(expected_symbols) and not missing_symbols and not failed_symbols,
+    }
+
+
+def _ensure_yesterday_data_for_dashboard() -> None:
+    target_date = (date.today() - timedelta(days=1)).isoformat()
+    readiness = _sync_readiness()
+    latest_trade_date = readiness.get("latest_trade_date")
+    if latest_trade_date and str(latest_trade_date) >= target_date:
+        return
+    if _completed_daily_sync_for_date(target_date) or _active_sync_job("full_daily_pipeline"):
+        return
+    with runtime.dashboard_sync_lock:
+        readiness = _sync_readiness()
+        latest_trade_date = readiness.get("latest_trade_date")
+        if latest_trade_date and str(latest_trade_date) >= target_date:
+            return
+        if _completed_daily_sync_for_date(target_date) or _active_sync_job("full_daily_pipeline"):
+            return
+        runtime.make_daily_pipeline().run_full_daily_pipeline(
+            start_date=target_date,
+            end_date=target_date,
+            requested_by="dashboard:auto",
+        )
+
+
+def _completed_daily_sync_for_date(target_date: str) -> bool:
+    completed_statuses = {"completed", "completed_with_errors"}
+    for job in _list_sync_jobs():
+        if job.get("job_type") != "full_daily_pipeline" or job.get("status") not in completed_statuses:
+            continue
+        if not hasattr(runtime.sync_repository, "get_job_items"):
+            continue
+        try:
+            items = runtime.sync_repository.get_job_items(job["id"])
+        except Exception:  # noqa: BLE001 - dashboard should not fail if job history is partially unavailable.
+            continue
+        if any(str(item.get("date_start")) <= target_date <= str(item.get("date_end")) for item in items if item.get("date_start") and item.get("date_end")):
+            return True
+    return False
+
+
+def _job_has_recent_activity(job: dict, stale_after: timedelta = timedelta(minutes=30)) -> bool:
+    timestamps = [job.get("started_at"), job.get("created_at")]
+    try:
+        if hasattr(runtime.sync_repository, "get_job_items"):
+            timestamps.extend(item.get("updated_at") for item in runtime.sync_repository.get_job_items(job["id"]))
+    except Exception:  # noqa: BLE001 - stale detection should not break sync creation.
+        pass
+    parsed = [_parse_timestamp(value) for value in timestamps if value]
+    if not parsed:
+        return True
+    return datetime.now(timezone.utc) - max(parsed) <= stale_after
+
+
+def _parse_timestamp(value) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _database_health(settings: AppSettings) -> dict[str, Any]:
     configured = bool(settings.db.host and settings.db.name and settings.db.user)
     if not configured:
@@ -434,3 +696,38 @@ def _database_health(settings: AppSettings) -> dict[str, Any]:
             "database": {"configured": True, "connected": False, "message": str(exc)},
             "migrations": {"applied": None, "status": "not_checked"},
         }
+
+
+def _enrich_market_dashboard(snapshot: dict[str, Any]) -> dict[str, Any]:
+    enriched = {
+        "indexes": snapshot.get("indexes", []),
+        "sectors": snapshot.get("sectors", []),
+        "rankings": {
+            "gainers": [],
+            "losers": [],
+            "amount": [],
+            **(snapshot.get("rankings") or {}),
+        },
+        "breadth": snapshot.get("breadth", {}),
+        "freshness": snapshot.get("freshness", {}),
+        "data_source_status": {
+            "provider": "local",
+            "stock_rankings": "local",
+            "index_rankings": "local" if snapshot.get("indexes") else "empty",
+            "sector_rankings": "local" if snapshot.get("sectors") else "empty",
+            "full_market_realtime": "disabled",
+            "errors": [],
+        },
+    }
+    enriched["breadth"] = _market_breadth_from_rankings(enriched["rankings"], enriched["breadth"])
+    return enriched
+
+
+def _market_breadth_from_rankings(rankings: dict[str, list], fallback: dict[str, Any]) -> dict[str, Any]:
+    rows = rankings.get("gainers") or rankings.get("amount") or []
+    if not rows:
+        return fallback
+    up = sum(1 for row in rows if float(row.get("change_rate") or 0) > 0)
+    down = sum(1 for row in rows if float(row.get("change_rate") or 0) < 0)
+    flat = max(0, len(rows) - up - down)
+    return {"up": up, "down": down, "flat": flat, "sample_size": len(rows)}

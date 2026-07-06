@@ -1,10 +1,10 @@
 .venv/
 __pycache__/
 .pytest_cache/
+.env
 *.pyc
 *.pyo
 *.db
 *.sqlite
 dist/
 build/
-

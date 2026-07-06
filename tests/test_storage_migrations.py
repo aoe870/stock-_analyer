@@ -11,8 +11,13 @@ from stock_analyzer_app.storage.migrations import (
 )
 
 
-def test_settings_reads_mysql_and_provider_defaults(monkeypatch):
+def test_settings_reads_mysql_and_provider_defaults(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("STOCK_ANALYZER_TUSHARE_TOKEN", raising=False)
+    monkeypatch.delenv("STOCK_ANALYZER_PROVIDER_PRIORITY", raising=False)
+    monkeypatch.delenv("STOCK_ANALYZER_MIANA_TOKEN", raising=False)
+    monkeypatch.delenv("STOCK_ANALYZER_SYNC_MAX_WORKERS", raising=False)
+    monkeypatch.delenv("STOCK_ANALYZER_MIANA_MAX_REQUESTS_PER_MINUTE", raising=False)
     monkeypatch.setenv("STOCK_ANALYZER_DB_HOST", "db.local")
     monkeypatch.setenv("STOCK_ANALYZER_DB_PASSWORD", "secret")
 
@@ -22,6 +27,36 @@ def test_settings_reads_mysql_and_provider_defaults(monkeypatch):
     assert settings.db.password == "secret"
     assert settings.provider_priority == ["tushare", "akshare", "eastmoney"]
     assert settings.sync_enabled is True
+    assert settings.sync_max_workers == 8
+    assert settings.miana_max_requests_per_minute == 500
+    assert settings.sync_include_optional_metadata is False
+
+
+def test_settings_loads_local_dotenv_for_miana_config(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("STOCK_ANALYZER_MIANA_TOKEN", raising=False)
+    monkeypatch.delenv("STOCK_ANALYZER_MIANA_BASE_URL", raising=False)
+    monkeypatch.delenv("STOCK_ANALYZER_PROVIDER_PRIORITY", raising=False)
+    monkeypatch.delenv("STOCK_ANALYZER_SYNC_MAX_WORKERS", raising=False)
+    monkeypatch.delenv("STOCK_ANALYZER_MIANA_MAX_REQUESTS_PER_MINUTE", raising=False)
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "STOCK_ANALYZER_MIANA_TOKEN=local-token",
+                "STOCK_ANALYZER_MIANA_BASE_URL=https://example.test/api",
+                "STOCK_ANALYZER_PROVIDER_PRIORITY=miana,akshare",
+                "STOCK_ANALYZER_SYNC_MAX_WORKERS=12",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = AppSettings.from_env()
+
+    assert settings.miana_token == "local-token"
+    assert settings.miana_base_url == "https://example.test/api"
+    assert settings.provider_priority == ["miana", "akshare"]
+    assert settings.sync_max_workers == 12
 
 
 def test_load_migration_files_returns_filename_order():
@@ -32,6 +67,8 @@ def test_load_migration_files_returns_filename_order():
         "002_create_analysis_schema.sql",
         "003_create_run_history_schema.sql",
         "004_create_stock_status_schema.sql",
+        "005_create_miana_multisource_schema.sql",
+        "006_create_miana_v2_research_schema.sql",
     ]
     assert all(len(file.checksum) == 64 for file in files)
 

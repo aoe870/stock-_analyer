@@ -3,7 +3,7 @@ services:
     image: mysql:8.4
     container_name: stock_analyzer_mysql
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     environment:
       MYSQL_ROOT_PASSWORD: "${STOCK_ANALYZER_MYSQL_ROOT_PASSWORD:-root-change-me}"
       MYSQL_DATABASE: "${STOCK_ANALYZER_DB_NAME:-stock_analyzer}"
@@ -16,6 +16,42 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+        PIP_DEFAULT_TIMEOUT: "${PIP_DEFAULT_TIMEOUT:-120}"
+    container_name: stock_analyzer_app
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      STOCK_ANALYZER_DB_HOST: mysql
+      STOCK_ANALYZER_DB_PORT: "3306"
+      STOCK_ANALYZER_DB_NAME: "${STOCK_ANALYZER_DB_NAME:-stock_analyzer}"
+      STOCK_ANALYZER_DB_USER: "${STOCK_ANALYZER_DB_USER:-stock_analyzer}"
+      STOCK_ANALYZER_DB_PASSWORD: "${STOCK_ANALYZER_DB_PASSWORD:-change-me}"
+      STOCK_ANALYZER_PROVIDER_PRIORITY: "${STOCK_ANALYZER_PROVIDER_PRIORITY:-miana,tushare,akshare,eastmoney}"
+      STOCK_ANALYZER_MIANA_TOKEN: "${STOCK_ANALYZER_MIANA_TOKEN:-}"
+      STOCK_ANALYZER_MIANA_BASE_URL: "${STOCK_ANALYZER_MIANA_BASE_URL:-https://miana.com.cn/api}"
+      STOCK_ANALYZER_MIANA_MAX_REQUESTS_PER_MINUTE: "${STOCK_ANALYZER_MIANA_MAX_REQUESTS_PER_MINUTE:-500}"
+      STOCK_ANALYZER_TUSHARE_TOKEN: "${STOCK_ANALYZER_TUSHARE_TOKEN:-}"
+      STOCK_ANALYZER_SYNC_ENABLED: "${STOCK_ANALYZER_SYNC_ENABLED:-true}"
+      STOCK_ANALYZER_SYNC_TIME: "${STOCK_ANALYZER_SYNC_TIME:-00:00}"
+      STOCK_ANALYZER_TIMEZONE: "${STOCK_ANALYZER_TIMEZONE:-Asia/Shanghai}"
+      STOCK_ANALYZER_SYNC_MAX_WORKERS: "${STOCK_ANALYZER_SYNC_MAX_WORKERS:-8}"
+      STOCK_ANALYZER_SYNC_RETRY_MAX_WORKERS: "${STOCK_ANALYZER_SYNC_RETRY_MAX_WORKERS:-4}"
+      STOCK_ANALYZER_SYNC_RETRY_ROUNDS: "${STOCK_ANALYZER_SYNC_RETRY_ROUNDS:-3}"
+      STOCK_ANALYZER_SYNC_INCLUDE_OPTIONAL_METADATA: "${STOCK_ANALYZER_SYNC_INCLUDE_OPTIONAL_METADATA:-false}"
+      STOCK_ANALYZER_LOG_LEVEL: "${STOCK_ANALYZER_LOG_LEVEL:-INFO}"
+      STOCK_ANALYZER_HOST: "0.0.0.0"
+      STOCK_ANALYZER_PORT: "8000"
+    restart: unless-stopped
 
 volumes:
   stock_analyzer_mysql_data:

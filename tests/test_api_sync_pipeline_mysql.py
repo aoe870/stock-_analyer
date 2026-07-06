@@ -1,10 +1,13 @@
 import pytest
 from fastapi.testclient import TestClient
+import importlib
 
 from stock_analyzer_app.api.app import create_app, runtime
 from stock_analyzer_app.config import AppSettings
 from stock_analyzer_app.data_provider.demo_provider import DemoAshareProvider
 from stock_analyzer_app.storage.mysql import MySqlRepository, mysql_available
+
+api_module = importlib.import_module("stock_analyzer_app.api.app")
 
 
 pytestmark = pytest.mark.skipif(
@@ -16,6 +19,7 @@ pytestmark = pytest.mark.skipif(
 def test_api_full_daily_pipeline_uses_persisted_sync_path(monkeypatch):
     runtime.configure_repositories()
     monkeypatch.setattr(runtime, "build_sync_providers", lambda: [DemoAshareProvider()])
+    monkeypatch.setattr(api_module, "_active_sync_job", lambda job_type: None)
     assert isinstance(runtime.analysis_repository, MySqlRepository)
     runtime.analysis_repository.clear_test_data(["DEMO001.SZ"])
     client = TestClient(create_app())
@@ -43,6 +47,7 @@ def test_api_full_daily_pipeline_uses_persisted_sync_path(monkeypatch):
 def test_api_persists_screening_and_backtest_run_history_to_mysql(monkeypatch):
     runtime.configure_repositories()
     monkeypatch.setattr(runtime, "build_sync_providers", lambda: [DemoAshareProvider()])
+    monkeypatch.setattr(api_module, "_active_sync_job", lambda job_type: None)
     client = TestClient(create_app())
     client.post(
         "/api/sync/jobs",
@@ -106,6 +111,7 @@ def test_api_full_daily_pipeline_uses_runtime_provider_chain(monkeypatch):
             return []
 
     monkeypatch.setattr(runtime, "build_sync_providers", lambda: [ChainProvider()])
+    monkeypatch.setattr(api_module, "_active_sync_job", lambda job_type: None)
     client = TestClient(create_app())
 
     response = client.post(

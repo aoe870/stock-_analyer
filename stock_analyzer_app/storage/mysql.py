@@ -61,9 +61,24 @@ class MySqlRepository:
                 cursor.execute(f"DELETE FROM strategy_signals WHERE symbol IN ({placeholders})", symbols)
                 cursor.execute(f"DELETE FROM daily_indicators WHERE symbol IN ({placeholders})", symbols)
                 cursor.execute(f"DELETE FROM analysis_daily_bars WHERE symbol IN ({placeholders})", symbols)
+                cursor.execute(f"DELETE FROM latest_market_quotes WHERE symbol IN ({placeholders})", symbols)
+                cursor.execute(f"DELETE FROM sector_constituents WHERE symbol IN ({placeholders})", symbols)
+                cursor.execute(f"DELETE FROM index_constituents WHERE symbol IN ({placeholders})", symbols)
+                cursor.execute(f"DELETE FROM stock_officer_rewards WHERE symbol IN ({placeholders})", symbols)
+                cursor.execute(f"DELETE FROM stock_company_officers WHERE symbol IN ({placeholders})", symbols)
+                cursor.execute(f"DELETE FROM stock_top10_holders WHERE symbol IN ({placeholders})", symbols)
+                cursor.execute(f"DELETE FROM cashflow_statements WHERE symbol IN ({placeholders})", symbols)
+                cursor.execute(f"DELETE FROM balance_sheets WHERE symbol IN ({placeholders})", symbols)
+                cursor.execute(f"DELETE FROM income_statements WHERE symbol IN ({placeholders})", symbols)
+                cursor.execute(f"DELETE FROM daily_money_flow WHERE symbol IN ({placeholders})", symbols)
+                cursor.execute(f"DELETE FROM share_capital_history WHERE symbol IN ({placeholders})", symbols)
+                cursor.execute(f"DELETE FROM corporate_actions WHERE symbol IN ({placeholders})", symbols)
+                cursor.execute(f"DELETE FROM stock_company_profiles WHERE symbol IN ({placeholders})", symbols)
+                cursor.execute(f"DELETE FROM stock_provider_profiles WHERE symbol IN ({placeholders})", symbols)
                 cursor.execute(f"DELETE FROM stock_daily_status WHERE symbol IN ({placeholders})", symbols)
                 cursor.execute(f"DELETE FROM adjustment_factors WHERE symbol IN ({placeholders})", symbols)
                 cursor.execute(f"DELETE FROM daily_bars WHERE symbol IN ({placeholders})", symbols)
+                cursor.execute(f"DELETE FROM raw_provider_payloads WHERE symbol IN ({placeholders})", symbols)
                 cursor.execute(f"DELETE FROM stocks WHERE symbol IN ({placeholders})", symbols)
                 cursor.execute(f"DELETE FROM sync_job_items WHERE symbol IN ({placeholders})", symbols)
 
@@ -174,6 +189,476 @@ class MySqlRepository:
             for row in rows
         ]
         self._executemany(sql, values)
+
+    def upsert_stock_provider_profiles(self, rows: list[dict]) -> None:
+        sql = """
+            INSERT INTO stock_provider_profiles
+                (symbol, provider, provider_symbol, exchange, name, industry, country_code, exchange_code,
+                 market, type, is_active, is_st, raw_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                provider_symbol=VALUES(provider_symbol), exchange=VALUES(exchange), name=VALUES(name),
+                industry=VALUES(industry), country_code=VALUES(country_code), exchange_code=VALUES(exchange_code),
+                market=VALUES(market), type=VALUES(type), is_active=VALUES(is_active), is_st=VALUES(is_st),
+                raw_json=VALUES(raw_json)
+        """
+        values = [
+            (
+                row["symbol"],
+                row.get("provider", row.get("source", "unknown")),
+                row.get("provider_symbol") or row["symbol"],
+                row.get("exchange"),
+                row.get("name"),
+                row.get("industry"),
+                row.get("country_code"),
+                row.get("exchange_code"),
+                row.get("market"),
+                row.get("type"),
+                bool(row.get("is_active", True)),
+                bool(row.get("is_st", False)),
+                _json_text(row.get("raw_json", {})),
+            )
+            for row in rows
+        ]
+        self._executemany(sql, values)
+
+    def upsert_stock_company_profiles(self, rows: list[dict]) -> None:
+        sql = """
+            INSERT INTO stock_company_profiles
+                (symbol, provider, industry, region, concepts, address, legal_person, chairman, president,
+                 secretary, org_tel, org_email, org_web, org_profile, main_business, raw_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                industry=VALUES(industry), region=VALUES(region), concepts=VALUES(concepts), address=VALUES(address),
+                legal_person=VALUES(legal_person), chairman=VALUES(chairman), president=VALUES(president),
+                secretary=VALUES(secretary), org_tel=VALUES(org_tel), org_email=VALUES(org_email),
+                org_web=VALUES(org_web), org_profile=VALUES(org_profile), main_business=VALUES(main_business),
+                raw_json=VALUES(raw_json)
+        """
+        values = [
+            (
+                row["symbol"],
+                row.get("provider", row.get("source", "unknown")),
+                row.get("industry"),
+                row.get("region"),
+                row.get("concepts"),
+                row.get("address"),
+                row.get("legal_person"),
+                row.get("chairman"),
+                row.get("president"),
+                row.get("secretary"),
+                row.get("org_tel"),
+                row.get("org_email"),
+                row.get("org_web"),
+                row.get("org_profile"),
+                row.get("main_business"),
+                _json_text(row.get("raw_json", {})),
+            )
+            for row in rows
+        ]
+        self._executemany(sql, values)
+
+    def upsert_corporate_actions(self, rows: list[dict]) -> None:
+        sql = """
+            INSERT INTO corporate_actions
+                (symbol, provider, action_type, currency, dividend, split_factor, notice_date, report_date,
+                 equity_record_date, ex_dividend_date, pay_cash_date, raw_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                currency=VALUES(currency), dividend=VALUES(dividend), split_factor=VALUES(split_factor),
+                equity_record_date=VALUES(equity_record_date), ex_dividend_date=VALUES(ex_dividend_date),
+                pay_cash_date=VALUES(pay_cash_date), raw_json=VALUES(raw_json)
+        """
+        values = [
+            (
+                row["symbol"],
+                row.get("provider", row.get("source", "unknown")),
+                row.get("action_type") or row.get("type", "unknown"),
+                row.get("currency"),
+                row.get("dividend"),
+                row.get("split_factor"),
+                row.get("notice_date"),
+                row.get("report_date"),
+                row.get("equity_record_date"),
+                row.get("ex_dividend_date"),
+                row.get("pay_cash_date"),
+                _json_text(row.get("raw_json", {})),
+            )
+            for row in rows
+        ]
+        self._executemany(sql, values)
+
+    def upsert_share_capital_history(self, rows: list[dict]) -> None:
+        sql = """
+            INSERT INTO share_capital_history
+                (symbol, provider, end_date, total_shares, floating_shares, limited_shares, change_reason, raw_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                total_shares=VALUES(total_shares), floating_shares=VALUES(floating_shares),
+                limited_shares=VALUES(limited_shares), change_reason=VALUES(change_reason), raw_json=VALUES(raw_json)
+        """
+        values = [
+            (
+                row["symbol"],
+                row.get("provider", row.get("source", "unknown")),
+                row["end_date"],
+                row.get("total_shares"),
+                row.get("floating_shares"),
+                row.get("limited_shares"),
+                row.get("change_reason"),
+                _json_text(row.get("raw_json", {})),
+            )
+            for row in rows
+        ]
+        self._executemany(sql, values)
+
+    def upsert_daily_money_flow(self, rows: list[dict]) -> None:
+        sql = """
+            INSERT INTO daily_money_flow
+                (symbol, provider, trade_date, amount, main_net_inflow_amount, main_net_ratio,
+                 super_large_inflow, super_large_outflow, super_large_net_inflow, super_large_net_ratio,
+                 large_inflow, large_outflow, large_net_inflow, large_net_ratio,
+                 medium_inflow, medium_outflow, medium_net_inflow, medium_net_ratio,
+                 small_inflow, small_outflow, small_net_inflow, small_net_ratio, raw_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                amount=VALUES(amount), main_net_inflow_amount=VALUES(main_net_inflow_amount),
+                main_net_ratio=VALUES(main_net_ratio), super_large_inflow=VALUES(super_large_inflow),
+                super_large_outflow=VALUES(super_large_outflow), super_large_net_inflow=VALUES(super_large_net_inflow),
+                super_large_net_ratio=VALUES(super_large_net_ratio), large_inflow=VALUES(large_inflow),
+                large_outflow=VALUES(large_outflow), large_net_inflow=VALUES(large_net_inflow),
+                large_net_ratio=VALUES(large_net_ratio), medium_inflow=VALUES(medium_inflow),
+                medium_outflow=VALUES(medium_outflow), medium_net_inflow=VALUES(medium_net_inflow),
+                medium_net_ratio=VALUES(medium_net_ratio), small_inflow=VALUES(small_inflow),
+                small_outflow=VALUES(small_outflow), small_net_inflow=VALUES(small_net_inflow),
+                small_net_ratio=VALUES(small_net_ratio), raw_json=VALUES(raw_json)
+        """
+        keys = [
+            "super_large_inflow",
+            "super_large_outflow",
+            "super_large_net_inflow",
+            "super_large_net_ratio",
+            "large_inflow",
+            "large_outflow",
+            "large_net_inflow",
+            "large_net_ratio",
+            "medium_inflow",
+            "medium_outflow",
+            "medium_net_inflow",
+            "medium_net_ratio",
+            "small_inflow",
+            "small_outflow",
+            "small_net_inflow",
+            "small_net_ratio",
+        ]
+        values = [
+            (
+                row["symbol"],
+                row.get("provider", row.get("source", "unknown")),
+                row["trade_date"],
+                row.get("amount"),
+                row.get("main_net_inflow_amount"),
+                row.get("main_net_ratio"),
+                *(row.get(key) for key in keys),
+                _json_text(row.get("raw_json", {})),
+            )
+            for row in rows
+        ]
+        self._executemany(sql, values)
+
+    def upsert_income_statements(self, rows: list[dict]) -> None:
+        sql = """
+            INSERT INTO income_statements
+                (symbol, provider, report_date, notice_date, report_period, currency, revenue, operating_revenue,
+                 operating_profit, total_profit, net_profit, net_profit_parent, eps, raw_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                notice_date=VALUES(notice_date), currency=VALUES(currency), revenue=VALUES(revenue),
+                operating_revenue=VALUES(operating_revenue), operating_profit=VALUES(operating_profit),
+                total_profit=VALUES(total_profit), net_profit=VALUES(net_profit),
+                net_profit_parent=VALUES(net_profit_parent), eps=VALUES(eps), raw_json=VALUES(raw_json)
+        """
+        values = [
+            (
+                row["symbol"],
+                row.get("provider", "unknown"),
+                row["report_date"],
+                row.get("notice_date"),
+                row.get("report_period", ""),
+                row.get("currency"),
+                row.get("revenue"),
+                row.get("operating_revenue"),
+                row.get("operating_profit"),
+                row.get("total_profit"),
+                row.get("net_profit"),
+                row.get("net_profit_parent"),
+                row.get("eps"),
+                _json_text(row.get("raw_json", {})),
+            )
+            for row in rows
+        ]
+        self._executemany(sql, values)
+
+    def upsert_balance_sheets(self, rows: list[dict]) -> None:
+        sql = """
+            INSERT INTO balance_sheets
+                (symbol, provider, report_date, notice_date, report_period, currency, total_assets,
+                 total_liabilities, total_equity, monetary_funds, accounts_receivable, inventory, raw_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                notice_date=VALUES(notice_date), currency=VALUES(currency), total_assets=VALUES(total_assets),
+                total_liabilities=VALUES(total_liabilities), total_equity=VALUES(total_equity),
+                monetary_funds=VALUES(monetary_funds), accounts_receivable=VALUES(accounts_receivable),
+                inventory=VALUES(inventory), raw_json=VALUES(raw_json)
+        """
+        values = [
+            (
+                row["symbol"],
+                row.get("provider", "unknown"),
+                row["report_date"],
+                row.get("notice_date"),
+                row.get("report_period", ""),
+                row.get("currency"),
+                row.get("total_assets"),
+                row.get("total_liabilities"),
+                row.get("total_equity"),
+                row.get("monetary_funds"),
+                row.get("accounts_receivable"),
+                row.get("inventory"),
+                _json_text(row.get("raw_json", {})),
+            )
+            for row in rows
+        ]
+        self._executemany(sql, values)
+
+    def upsert_cashflow_statements(self, rows: list[dict]) -> None:
+        sql = """
+            INSERT INTO cashflow_statements
+                (symbol, provider, report_date, notice_date, report_period, currency, net_operating_cashflow,
+                 net_investing_cashflow, net_financing_cashflow, cash_and_equivalents, raw_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                notice_date=VALUES(notice_date), currency=VALUES(currency),
+                net_operating_cashflow=VALUES(net_operating_cashflow),
+                net_investing_cashflow=VALUES(net_investing_cashflow),
+                net_financing_cashflow=VALUES(net_financing_cashflow),
+                cash_and_equivalents=VALUES(cash_and_equivalents), raw_json=VALUES(raw_json)
+        """
+        values = [
+            (
+                row["symbol"],
+                row.get("provider", "unknown"),
+                row["report_date"],
+                row.get("notice_date"),
+                row.get("report_period", ""),
+                row.get("currency"),
+                row.get("net_operating_cashflow"),
+                row.get("net_investing_cashflow"),
+                row.get("net_financing_cashflow"),
+                row.get("cash_and_equivalents"),
+                _json_text(row.get("raw_json", {})),
+            )
+            for row in rows
+        ]
+        self._executemany(sql, values)
+
+    def upsert_stock_top10_holders(self, rows: list[dict]) -> None:
+        sql = """
+            INSERT INTO stock_top10_holders
+                (symbol, provider, report_date, holder_name, holder_rank, hold_volume, hold_ratio, share_type, raw_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                holder_rank=VALUES(holder_rank), hold_volume=VALUES(hold_volume),
+                hold_ratio=VALUES(hold_ratio), share_type=VALUES(share_type), raw_json=VALUES(raw_json)
+        """
+        values = [
+            (
+                row["symbol"],
+                row.get("provider", "unknown"),
+                row["report_date"],
+                row["holder_name"],
+                row.get("holder_rank"),
+                row.get("hold_volume"),
+                row.get("hold_ratio"),
+                row.get("share_type"),
+                _json_text(row.get("raw_json", {})),
+            )
+            for row in rows
+        ]
+        self._executemany(sql, values)
+
+    def upsert_stock_company_officers(self, rows: list[dict]) -> None:
+        sql = """
+            INSERT INTO stock_company_officers
+                (symbol, provider, officer_name, title, start_date, end_date, raw_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                start_date=VALUES(start_date), end_date=VALUES(end_date), raw_json=VALUES(raw_json)
+        """
+        values = [
+            (
+                row["symbol"],
+                row.get("provider", "unknown"),
+                row["officer_name"],
+                row.get("title", ""),
+                row.get("start_date"),
+                row.get("end_date"),
+                _json_text(row.get("raw_json", {})),
+            )
+            for row in rows
+        ]
+        self._executemany(sql, values)
+
+    def upsert_stock_officer_rewards(self, rows: list[dict]) -> None:
+        sql = """
+            INSERT INTO stock_officer_rewards
+                (symbol, provider, report_date, officer_name, title, reward, hold_volume, raw_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                title=VALUES(title), reward=VALUES(reward), hold_volume=VALUES(hold_volume), raw_json=VALUES(raw_json)
+        """
+        values = [
+            (
+                row["symbol"],
+                row.get("provider", "unknown"),
+                row["report_date"],
+                row["officer_name"],
+                row.get("title"),
+                row.get("reward"),
+                row.get("hold_volume"),
+                _json_text(row.get("raw_json", {})),
+            )
+            for row in rows
+        ]
+        self._executemany(sql, values)
+
+    def upsert_market_indexes(self, rows: list[dict]) -> None:
+        sql = """
+            INSERT INTO market_indexes (index_code, provider, name, exchange_code, country_code, raw_json)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                name=VALUES(name), exchange_code=VALUES(exchange_code), country_code=VALUES(country_code), raw_json=VALUES(raw_json)
+        """
+        self._executemany(
+            sql,
+            [
+                (row["index_code"], row.get("provider", "unknown"), row.get("name", row["index_code"]), row.get("exchange_code"), row.get("country_code"), _json_text(row.get("raw_json", {})))
+                for row in rows
+            ],
+        )
+
+    def upsert_index_constituents(self, rows: list[dict]) -> None:
+        sql = """
+            INSERT INTO index_constituents (index_code, provider, symbol, weight, raw_json)
+            VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE weight=VALUES(weight), raw_json=VALUES(raw_json)
+        """
+        self._executemany(sql, [(row["index_code"], row.get("provider", "unknown"), row["symbol"], row.get("weight"), _json_text(row.get("raw_json", {}))) for row in rows])
+
+    def upsert_latest_index_quotes(self, rows: list[dict]) -> None:
+        sql = """
+            INSERT INTO latest_index_quotes
+                (index_code, provider, quote_time, price, change_amount, change_rate, volume, amount, raw_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                quote_time=VALUES(quote_time), price=VALUES(price), change_amount=VALUES(change_amount),
+                change_rate=VALUES(change_rate), volume=VALUES(volume), amount=VALUES(amount), raw_json=VALUES(raw_json)
+        """
+        self._executemany(
+            sql,
+            [
+                (
+                    row["index_code"],
+                    row.get("provider", row.get("source", "unknown")),
+                    row.get("quote_time") or row.get("trade_date"),
+                    row.get("price") or row.get("close"),
+                    row.get("change_amount") or row.get("change"),
+                    row.get("change_rate"),
+                    row.get("volume"),
+                    row.get("amount"),
+                    _json_text(row.get("raw_json", row)),
+                )
+                for row in rows
+            ],
+        )
+
+    def upsert_market_sectors(self, rows: list[dict]) -> None:
+        sql = """
+            INSERT INTO market_sectors (sector_code, provider, name, market, raw_json)
+            VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE name=VALUES(name), market=VALUES(market), raw_json=VALUES(raw_json)
+        """
+        self._executemany(
+            sql,
+            [(row["sector_code"], row.get("provider", "unknown"), row.get("name", row["sector_code"]), row.get("market"), _json_text(row.get("raw_json", {}))) for row in rows],
+        )
+
+    def upsert_sector_constituents(self, rows: list[dict]) -> None:
+        sql = """
+            INSERT INTO sector_constituents (sector_code, provider, symbol, weight, raw_json)
+            VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE weight=VALUES(weight), raw_json=VALUES(raw_json)
+        """
+        self._executemany(sql, [(row["sector_code"], row.get("provider", "unknown"), row["symbol"], row.get("weight"), _json_text(row.get("raw_json", {}))) for row in rows])
+
+    def upsert_latest_sector_quotes(self, rows: list[dict]) -> None:
+        sql = """
+            INSERT INTO latest_sector_quotes
+                (sector_code, provider, quote_time, price, change_amount, change_rate, amount, raw_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                quote_time=VALUES(quote_time), price=VALUES(price), change_amount=VALUES(change_amount),
+                change_rate=VALUES(change_rate), amount=VALUES(amount), raw_json=VALUES(raw_json)
+        """
+        self._executemany(
+            sql,
+            [
+                (
+                    row["sector_code"],
+                    row.get("provider", row.get("source", "unknown")),
+                    row.get("quote_time") or row.get("trade_date"),
+                    row.get("price") or row.get("close"),
+                    row.get("change_amount") or row.get("change"),
+                    row.get("change_rate"),
+                    row.get("amount"),
+                    _json_text(row.get("raw_json", row)),
+                )
+                for row in rows
+            ],
+        )
+
+    def save_raw_provider_payload(
+        self,
+        provider: str,
+        endpoint: str,
+        payload: dict | list,
+        symbol: str | None = None,
+        trade_date: str | None = None,
+        date_start: str | None = None,
+        date_end: str | None = None,
+        request_params: dict | None = None,
+    ) -> None:
+        payload_json = _json_text(payload)
+        payload_hash = __import__("hashlib").sha256(payload_json.encode("utf-8")).hexdigest()
+        sql = """
+            INSERT IGNORE INTO raw_provider_payloads
+                (provider, endpoint, symbol, trade_date, request_params_json, date_start, date_end, payload_hash, payload_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        self._execute(
+            sql,
+            (
+                provider,
+                endpoint,
+                symbol,
+                trade_date,
+                _json_text(request_params or {}),
+                date_start,
+                date_end,
+                payload_hash,
+                payload_json,
+            ),
+        )
 
     def stock_status(self, symbols: list[str], trade_date: str) -> list[dict]:
         if not symbols:
@@ -343,7 +828,10 @@ class MySqlRepository:
         return output
 
     def bars(self, symbol: str, price_mode: str = "forward_adjusted") -> list[dict]:
-        return self.analysis_bars_with_signals([symbol], "0001-01-01", "9999-12-31", price_mode).get(symbol, [])
+        rows = self.analysis_bars_with_signals([symbol], "0001-01-01", "9999-12-31", price_mode).get(symbol, [])
+        if rows or price_mode != "forward_adjusted":
+            return rows
+        return self.analysis_bars_with_signals([symbol], "0001-01-01", "9999-12-31", "unadjusted").get(symbol, [])
 
     def indicators(self, symbol: str) -> list[dict]:
         with self.connection() as connection:
@@ -362,19 +850,259 @@ class MySqlRepository:
                     rows.append(decoded)
                 return rows
 
+    def stock_financials(self, symbol: str) -> dict:
+        return {
+            "symbol": symbol,
+            "income": self._select_symbol_rows("income_statements", symbol, "report_date DESC"),
+            "balance": self._select_symbol_rows("balance_sheets", symbol, "report_date DESC"),
+            "cashflow": self._select_symbol_rows("cashflow_statements", symbol, "report_date DESC"),
+        }
+
+    def stock_capital_flow(self, symbol: str) -> dict:
+        return {"symbol": symbol, "rows": self._select_symbol_rows("daily_money_flow", symbol, "trade_date DESC")}
+
+    def stock_research_snapshot(self, symbol: str) -> dict:
+        stock = self.get_stock(symbol)
+        if not stock:
+            raise KeyError(symbol)
+        bars = self.bars(symbol)
+        return {
+            "stock": stock,
+            "latest_bar": bars[-1] if bars else None,
+            "company_profile": self._first_symbol_row("stock_company_profiles", symbol),
+            "share_capital": self._select_symbol_rows("share_capital_history", symbol, "end_date DESC"),
+            "corporate_actions": self._select_symbol_rows("corporate_actions", symbol, "notice_date DESC"),
+            "holders": self._select_symbol_rows("stock_top10_holders", symbol, "report_date DESC, holder_rank ASC"),
+            "officers": self._select_symbol_rows("stock_company_officers", symbol, "officer_name ASC"),
+            "data_quality": {
+                "has_bars": bool(bars),
+                "has_research_data": bool(self._first_symbol_row("stock_company_profiles", symbol)),
+            },
+        }
+
+    def market_dashboard_snapshot(self) -> dict:
+        indexes = self._select_rows(
+            """
+            SELECT q.index_code, q.provider, COALESCE(i.name, q.index_code) AS name, i.exchange_code, i.country_code,
+                   q.quote_time AS trade_date, q.price, q.change_amount AS `change`, q.change_rate, q.volume, q.amount
+            FROM latest_index_quotes q
+            LEFT JOIN market_indexes i ON i.index_code=q.index_code AND i.provider=q.provider
+            ORDER BY q.change_rate DESC, q.index_code
+            LIMIT 50
+            """
+        )
+        if not indexes:
+            indexes = self._select_rows("SELECT index_code, provider, name, exchange_code, country_code FROM market_indexes ORDER BY index_code LIMIT 50")
+        sectors = self._select_rows(
+            """
+            SELECT q.sector_code, q.provider, COALESCE(s.name, q.sector_code) AS name, s.market,
+                   q.quote_time AS trade_date, q.price, q.change_amount AS `change`, q.change_rate, q.amount
+            FROM latest_sector_quotes q
+            LEFT JOIN market_sectors s ON s.sector_code=q.sector_code AND s.provider=q.provider
+            ORDER BY q.change_rate DESC, q.sector_code
+            LIMIT 100
+            """
+        )
+        if not sectors:
+            sectors = self._select_rows("SELECT sector_code, provider, name, market FROM market_sectors ORDER BY name LIMIT 100")
+        ranked = self._select_rows(
+            """
+            SELECT adb.symbol, s.name, adb.trade_date, adb.close, adb.volume, adb.amount, adb.price_mode, adb.data_quality
+            FROM analysis_daily_bars adb
+            JOIN (
+                SELECT symbol, MAX(trade_date) AS trade_date
+                FROM analysis_daily_bars
+                WHERE price_mode='forward_adjusted'
+                GROUP BY symbol
+            ) latest ON latest.symbol=adb.symbol AND latest.trade_date=adb.trade_date
+            LEFT JOIN stocks s ON s.symbol=adb.symbol
+            WHERE adb.price_mode='forward_adjusted'
+            ORDER BY adb.amount DESC
+            LIMIT 20
+            """
+        )
+        readiness = self.sync_readiness()
+        return {
+            "indexes": indexes,
+            "sectors": sectors,
+            "rankings": {"gainers": [], "losers": [], "amount": ranked},
+            "breadth": {"up": 0, "down": 0, "flat": readiness.get("updated_symbols", 0)},
+            "freshness": {
+                "latest_trade_date": readiness.get("latest_trade_date"),
+                "ready_for_analysis": readiness.get("ready_for_analysis", False),
+                "updated_symbols": readiness.get("updated_symbols", 0),
+                "expected_symbols": readiness.get("expected_symbols", 0),
+            },
+        }
+
+    def data_center_coverage(self) -> dict:
+        return {
+            "core": self.coverage(),
+            "research": {
+                "financial_statements": {"rows": self._count_rows("income_statements") + self._count_rows("balance_sheets") + self._count_rows("cashflow_statements")},
+                "capital_flow": self._count_symbols_and_rows("daily_money_flow"),
+                "company_profiles": self._count_symbols_and_rows("stock_company_profiles"),
+                "holders": self._count_symbols_and_rows("stock_top10_holders"),
+            },
+            "market_structure": {
+                "indexes": {"rows": self._count_rows("market_indexes")},
+                "sectors": {"rows": self._count_rows("market_sectors")},
+                "index_constituents": {"rows": self._count_rows("index_constituents")},
+                "sector_constituents": {"rows": self._count_rows("sector_constituents")},
+            },
+            "sync": {
+                "readiness": self.sync_readiness(),
+                "jobs": self.list_jobs(10),
+            },
+        }
+
     def coverage(self) -> dict:
         with self.connection() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT COUNT(DISTINCT symbol) AS symbol_count, COUNT(*) AS row_count FROM analysis_daily_bars")
-                analysis = cursor.fetchone()
-                cursor.execute("SELECT COUNT(*) AS row_count FROM daily_indicators")
-                indicators = cursor.fetchone()
-                cursor.execute("SELECT COUNT(*) AS row_count FROM strategy_signals")
-                signals = cursor.fetchone()
+                cursor.execute(
+                    """
+                    SELECT trade_date AS latest_trade_date
+                    FROM analysis_daily_bars FORCE INDEX (idx_analysis_date_mode)
+                    WHERE price_mode='forward_adjusted'
+                    ORDER BY trade_date DESC
+                    LIMIT 1
+                    """
+                )
+                latest_trade_date_row = cursor.fetchone()
+                latest_trade_date = latest_trade_date_row["latest_trade_date"] if latest_trade_date_row else None
+                if latest_trade_date:
+                    cursor.execute(
+                        """
+                        SELECT COUNT(DISTINCT symbol) AS symbol_count, COUNT(*) AS row_count
+                        FROM analysis_daily_bars
+                        WHERE trade_date=%s AND price_mode='forward_adjusted'
+                        """,
+                        (latest_trade_date,),
+                    )
+                    analysis = cursor.fetchone()
+                    cursor.execute(
+                        "SELECT COUNT(*) AS row_count FROM daily_indicators WHERE trade_date=%s",
+                        (latest_trade_date,),
+                    )
+                    indicators = cursor.fetchone()
+                    cursor.execute(
+                        "SELECT COUNT(*) AS row_count FROM strategy_signals WHERE trade_date=%s",
+                        (latest_trade_date,),
+                    )
+                    signals = cursor.fetchone()
+                else:
+                    analysis = {"symbol_count": 0, "row_count": 0}
+                    indicators = {"row_count": 0}
+                    signals = {"row_count": 0}
         return {
-            "analysis_daily_bars": {"symbols": analysis["symbol_count"], "rows": analysis["row_count"]},
-            "daily_indicators": {"rows": indicators["row_count"]},
-            "strategy_signals": {"rows": signals["row_count"]},
+            "analysis_daily_bars": {
+                "symbols": analysis["symbol_count"],
+                "rows": analysis["row_count"],
+                "latest_trade_date": str(latest_trade_date) if latest_trade_date else None,
+                "scope": "latest_trade_date",
+            },
+            "daily_indicators": {"rows": indicators["row_count"], "scope": "latest_trade_date"},
+            "strategy_signals": {"rows": signals["row_count"], "scope": "latest_trade_date"},
+        }
+
+    def sync_readiness(self) -> dict:
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT trade_date AS latest_trade_date
+                    FROM analysis_daily_bars FORCE INDEX (idx_analysis_date_mode)
+                    WHERE price_mode='forward_adjusted'
+                    ORDER BY trade_date DESC
+                    LIMIT 1
+                    """
+                )
+                latest_trade_date_row = cursor.fetchone()
+                latest_trade_date = latest_trade_date_row["latest_trade_date"] if latest_trade_date_row else None
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) AS expected_symbols
+                    FROM stocks
+                    WHERE is_active=1
+                      AND symbol REGEXP '^[0-9]{6}\\.(SH|SZ|BJ)$'
+                    """
+                )
+                expected_symbols = cursor.fetchone()["expected_symbols"]
+                if latest_trade_date:
+                    cursor.execute(
+                        """
+                        SELECT COUNT(DISTINCT adb.symbol) AS updated_symbols
+                        FROM analysis_daily_bars adb
+                        JOIN stocks s ON s.symbol=adb.symbol
+                        WHERE adb.trade_date=%s
+                          AND adb.price_mode='forward_adjusted'
+                          AND s.is_active=1
+                          AND s.symbol REGEXP '^[0-9]{6}\\.(SH|SZ|BJ)$'
+                        """,
+                        (latest_trade_date,),
+                    )
+                    updated_symbols = cursor.fetchone()["updated_symbols"]
+                    cursor.execute(
+                        """
+                        SELECT s.symbol
+                        FROM stocks s
+                        LEFT JOIN analysis_daily_bars adb
+                          ON adb.symbol=s.symbol
+                         AND adb.trade_date=%s
+                         AND adb.price_mode='forward_adjusted'
+                        WHERE s.is_active=1
+                          AND s.symbol REGEXP '^[0-9]{6}\\.(SH|SZ|BJ)$'
+                          AND adb.symbol IS NULL
+                        ORDER BY s.symbol
+                        """,
+                        (latest_trade_date,),
+                    )
+                    missing_symbols = [row["symbol"] for row in cursor.fetchall()]
+                else:
+                    updated_symbols = 0
+                    cursor.execute(
+                        """
+                        SELECT symbol
+                        FROM stocks
+                        WHERE is_active=1
+                          AND symbol REGEXP '^[0-9]{6}\\.(SH|SZ|BJ)$'
+                        ORDER BY symbol
+                        """
+                    )
+                    missing_symbols = [row["symbol"] for row in cursor.fetchall()]
+                cursor.execute(
+                    """
+                    SELECT id
+                    FROM sync_jobs
+                    WHERE job_type='full_daily_pipeline'
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """
+                )
+                latest_job_id_row = cursor.fetchone()
+                latest_job = self.get_job(latest_job_id_row["id"]) if latest_job_id_row else None
+                failed_symbols: list[str] = []
+                if latest_job:
+                    cursor.execute(
+                        """
+                        SELECT DISTINCT symbol
+                        FROM sync_job_items
+                        WHERE job_id=%s AND status='failed' AND symbol IS NOT NULL
+                        ORDER BY symbol
+                        """,
+                        (latest_job["id"],),
+                    )
+                    failed_symbols = [row["symbol"] for row in cursor.fetchall()]
+        return {
+            "latest_trade_date": str(latest_trade_date) if latest_trade_date else None,
+            "expected_symbols": expected_symbols,
+            "updated_symbols": updated_symbols,
+            "missing_symbol_count": len(missing_symbols),
+            "missing_symbols": missing_symbols[:100],
+            "failed_symbol_count": len(failed_symbols),
+            "failed_symbols": failed_symbols[:100],
+            "latest_sync_job": latest_job,
+            "ready_for_analysis": bool(expected_symbols) and not missing_symbols and not failed_symbols,
         }
 
     def create_job(self, job_type: str, requested_by: str, provider_priority: list[str]) -> dict:
@@ -426,12 +1154,17 @@ class MySqlRepository:
         row["summary"] = json.loads(row.pop("summary_json") or "{}")
         return row
 
-    def list_jobs(self) -> list[dict]:
+    def list_jobs(self, limit: int = 100) -> list[dict]:
         with self.connection() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT id FROM sync_jobs ORDER BY id DESC")
-                ids = [row["id"] for row in cursor.fetchall()]
-        return [self.get_job(job_id) for job_id in ids]
+                cursor.execute("SELECT * FROM sync_jobs ORDER BY id DESC LIMIT %s", (limit,))
+                rows = cursor.fetchall()
+        jobs = []
+        for row in rows:
+            row["provider_priority"] = json.loads(row.pop("provider_priority_json") or "[]")
+            row["summary"] = json.loads(row.pop("summary_json") or "{}")
+            jobs.append(row)
+        return jobs
 
     def get_job_items(self, job_id: int) -> list[dict]:
         with self.connection() as connection:
@@ -645,6 +1378,32 @@ class MySqlRepository:
             with connection.cursor() as cursor:
                 cursor.execute(sql, values)
 
+    def _select_rows(self, sql: str, values: tuple = ()) -> list[dict]:
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(sql, values)
+                return [_json_ready(_numbers(dict(row))) for row in cursor.fetchall()]
+
+    def _select_symbol_rows(self, table: str, symbol: str, order_by: str) -> list[dict]:
+        return self._select_rows(f"SELECT * FROM {table} WHERE symbol=%s ORDER BY {order_by}", (symbol,))
+
+    def _first_symbol_row(self, table: str, symbol: str) -> dict | None:
+        rows = self._select_rows(f"SELECT * FROM {table} WHERE symbol=%s LIMIT 1", (symbol,))
+        return rows[0] if rows else None
+
+    def _count_rows(self, table: str) -> int:
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"SELECT COUNT(*) AS rows_count FROM {table}")
+                return int(cursor.fetchone()["rows_count"])
+
+    def _count_symbols_and_rows(self, table: str) -> dict:
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"SELECT COUNT(DISTINCT symbol) AS symbols, COUNT(*) AS rows_count FROM {table}")
+                row = cursor.fetchone()
+        return {"symbols": int(row["symbols"]), "rows": int(row["rows_count"])}
+
 
 def _json_text(value: Any) -> str:
     if isinstance(value, str):
@@ -665,6 +1424,13 @@ def _numbers(row: dict) -> dict:
             continue
         if hasattr(value, "__float__"):
             row[key] = float(value)
+    return row
+
+
+def _json_ready(row: dict) -> dict:
+    for key, value in list(row.items()):
+        if hasattr(value, "isoformat"):
+            row[key] = value.isoformat()
     return row
 
 

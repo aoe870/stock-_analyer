@@ -1,0 +1,14 @@
+.git
+.venv
+__pycache__
+.pytest_cache
+dist
+build
+logs
+*.pyc
+*.pyo
+*.db
+*.sqlite
+.env
+remaining_*.txt
+remaining_*.tsv
