@@ -24,7 +24,7 @@ class AppSettings:
     timezone: str
     log_level: str
     miana_token: str = ""
-    miana_base_url: str = "https://miana.com.cn/api"
+    miana_base_url: str = "http://124.222.142.232:9876/api"
     sync_max_workers: int = 8
     miana_max_requests_per_minute: int = 500
     sync_retry_max_workers: int = 4
@@ -50,7 +50,7 @@ class AppSettings:
             provider_priority=priority,
             tushare_token=os.getenv("STOCK_ANALYZER_TUSHARE_TOKEN", ""),
             miana_token=os.getenv("STOCK_ANALYZER_MIANA_TOKEN", ""),
-            miana_base_url=os.getenv("STOCK_ANALYZER_MIANA_BASE_URL", "https://miana.com.cn/api"),
+            miana_base_url=os.getenv("STOCK_ANALYZER_MIANA_BASE_URL", "http://124.222.142.232:9876/api"),
             sync_max_workers=int(os.getenv("STOCK_ANALYZER_SYNC_MAX_WORKERS", "8")),
             miana_max_requests_per_minute=int(os.getenv("STOCK_ANALYZER_MIANA_MAX_REQUESTS_PER_MINUTE", "500")),
             sync_retry_max_workers=int(os.getenv("STOCK_ANALYZER_SYNC_RETRY_MAX_WORKERS", "4")),

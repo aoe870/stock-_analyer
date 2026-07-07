@@ -15,6 +15,7 @@ def test_miana_symbol_conversion_for_a_share_exchanges():
 def test_miana_provider_normalizes_stock_list_and_kline_rows():
     def fake_get(endpoint, params):
         if endpoint == "/stock/v1/stockList":
+            assert params == {"market": "cn_hsj"}
             return {
                 "code": 200,
                 "data": [
@@ -27,7 +28,7 @@ def test_miana_provider_normalizes_stock_list_and_kline_rows():
             return {
                 "code": 200,
                 "data": [
-                    {"date": "2024-01-02 00:00:00", "open": 10, "high": 11, "low": 9, "price": 10.5, "volume": 100, "amount": 1000}
+                    {"date": "2024-01-02 00:00:00", "open": "10", "high": "11", "low": "9", "close": "10.5", "preClose": "10.2", "volume": "100", "amount": "1000"}
                 ],
             }
         raise AssertionError(endpoint)
@@ -90,22 +91,28 @@ def test_miana_provider_derives_adjustment_factors_from_bfq_and_qfq_close():
 def test_miana_provider_normalizes_stock_and_index_rankings_from_sort_payloads():
     def fake_get(endpoint, params):
         if endpoint == "/stock/v1/sort":
-            assert params == {"market": "cn_hs", "sort": "changeRate", "order": "DESC", "page": "1"}
+            assert params == {"market": "cn_hsj", "sort": "changeRate", "order": "DESC", "page": "1"}
             return {
                 "code": 200,
                 "data": {
-                    "page": 1,
+                    "pageNum": 1,
                     "list": [
                         {
                             "code": "600519",
                             "name": "贵州茅台",
                             "exchangeCode": "XSHG",
-                            "date": "2026-07-06",
-                            "price": 1800,
-                            "change": 18,
-                            "changeRate": 1,
-                            "volume": 100,
-                            "amount": 180000,
+                            "localDate": "2026-07-06 15:00:00",
+                            "price": "1800",
+                            "preClose": "1782",
+                            "change": "18",
+                            "changeRate": "1",
+                            "volume": "100",
+                            "amount": "180000",
+                            "mktCap": "2200000000000",
+                            "floatCap": "2100000000000",
+                            "totShr": "1250000000",
+                            "floatShr": "1200000000",
+                            "turnover": "0.5",
                         }
                     ],
                 },
@@ -135,8 +142,13 @@ def test_miana_provider_normalizes_stock_and_index_rankings_from_sort_payloads()
     index_rows = provider.fetch_index_rankings(sort="changeRate", order="DESC")
 
     assert stock_rows[0]["symbol"] == "600519.SH"
+    assert stock_rows[0]["trade_date"] == "2026-07-06"
     assert stock_rows[0]["change_rate"] == 0.01
     assert stock_rows[0]["amount"] == 180000
+    assert stock_rows[0]["market_value"] == "2200000000000"
+    assert stock_rows[0]["circulation_value"] == "2100000000000"
+    assert stock_rows[0]["total_shares"] == "1250000000"
+    assert stock_rows[0]["circulation_shares"] == "1200000000"
     assert index_rows[0]["index_code"] == "sh000001"
     assert index_rows[0]["price"] == 3200
     assert index_rows[0]["change_rate"] == 0.005
@@ -208,22 +220,23 @@ def test_miana_provider_fetches_long_kline_ranges_in_date_segments():
 def test_miana_provider_normalizes_financial_statement_rows():
     def fake_get(endpoint, params):
         assert params["symbol"] == "sz000001"
-        if endpoint == "/stock/v1/incomeSheet":
+        if endpoint == "/stock/v1/incomeStatement":
             return {
                 "code": 200,
                 "data": [
                     {
                         "reportDate": "2024-12-31",
-                        "noticeDate": "2025-04-01",
-                        "reportPeriod": "2024A",
+                        "announcementDate": "2025-04-01",
+                        "fiscalYear": 2024,
+                        "fiscalPeriod": "A",
                         "currency": "CNY",
-                        "revenue": 100,
+                        "totalRevenue": 100,
                         "operatingRevenue": 90,
                         "operatingProfit": 30,
                         "totalProfit": 28,
                         "netProfit": 20,
-                        "netProfitParent": 18,
-                        "eps": 1.2,
+                        "netProfitToParent": 18,
+                        "basicEps": 1.2,
                     }
                 ],
             }
@@ -242,16 +255,20 @@ def test_miana_provider_normalizes_financial_statement_rows():
                     }
                 ],
             }
-        if endpoint == "/stock/v1/cashflow":
+        if endpoint == "/stock/v1/cashFlowStatement":
             return {
                 "code": 200,
                 "data": [
                     {
                         "reportDate": "2024-12-31",
-                        "netOperatingCashflow": 50,
-                        "netInvestingCashflow": -20,
-                        "netFinancingCashflow": -10,
-                        "cashAndEquivalents": 200,
+                        "announcementDate": "2025-04-01",
+                        "fiscalYear": 2024,
+                        "fiscalPeriod": "A",
+                        "currency": "CNY",
+                        "netCashFromOperating": 50,
+                        "netCashFromInvesting": -20,
+                        "netCashFromFinancing": -10,
+                        "cashClosingBalance": 200,
                     }
                 ],
             }
@@ -275,30 +292,191 @@ def test_miana_provider_normalizes_financial_statement_rows():
         "eps": 1.2,
         "raw_json": {
             "reportDate": "2024-12-31",
-            "noticeDate": "2025-04-01",
-            "reportPeriod": "2024A",
+            "announcementDate": "2025-04-01",
+            "fiscalYear": 2024,
+            "fiscalPeriod": "A",
             "currency": "CNY",
-            "revenue": 100,
+            "totalRevenue": 100,
             "operatingRevenue": 90,
             "operatingProfit": 30,
             "totalProfit": 28,
             "netProfit": 20,
-            "netProfitParent": 18,
-            "eps": 1.2,
+            "netProfitToParent": 18,
+            "basicEps": 1.2,
         },
     }
     assert provider.fetch_balance_sheets("000001.SZ")[0]["total_assets"] == 1000
     assert provider.fetch_cashflow_statements("000001.SZ")[0]["net_operating_cashflow"] == 50
 
 
+def test_miana_provider_normalizes_company_info_array_rows_from_v1_documentation():
+    def fake_get(endpoint, params):
+        assert endpoint == "/stock/v1/companyInfo"
+        assert params["symbol"] == "sh600519"
+        return {
+            "code": 200,
+            "msg": "ok",
+            "data": [
+                {
+                    "code": "600519",
+                    "name": "贵州茅台",
+                    "orgName": "贵州茅台酒股份有限公司",
+                    "industry": "食品饮料-饮料-白酒",
+                    "regionBK": "贵州省",
+                    "concepts": "白酒,超级品牌",
+                    "address": "贵州省仁怀市茅台镇",
+                    "regAddress": "贵州省仁怀市茅台镇",
+                    "chairman": "陈华",
+                    "legalPerson": "陈华",
+                    "president": "王莉(代)",
+                    "secretary": "余思明",
+                    "foundDate": "1999-11-20",
+                    "regCapital": 1250080000,
+                    "totalNum": 34992,
+                    "accountFirm": "天健会计师事务所(特殊普通合伙)",
+                    "legalAdviser": "北京市金杜律师事务所",
+                    "orgTel": "0851-22386002",
+                    "orgEmail": "mtdm@moutaichina.com",
+                    "orgWeb": "www.moutaichina.com",
+                    "orgProfile": "机构简介",
+                    "profile": "高端白酒生产企业",
+                    "mainBusiness": "茅台酒及系列酒的生产与销售",
+                }
+            ],
+        }
+
+    provider = MianaProvider("token", http_get=fake_get)
+
+    row = provider.fetch_company_profiles("600519.SH")[0]
+
+    assert row["company_name"] == "贵州茅台酒股份有限公司"
+    assert row["industry"] == "食品饮料-饮料-白酒"
+    assert row["region"] == "贵州省"
+    assert row["address"] == "贵州省仁怀市茅台镇"
+    assert row["registered_capital"] == 1250080000
+    assert row["employee_count"] == 34992
+    assert row["found_date"] == "1999-11-20"
+    assert row["accounting_firm"] == "天健会计师事务所(特殊普通合伙)"
+    assert row["legal_adviser"] == "北京市金杜律师事务所"
+    assert row["company_profile"] == "高端白酒生产企业"
+
+
+def test_miana_provider_uses_concepts_as_found_date_when_company_info_omits_found_date():
+    def fake_get(endpoint, params):
+        assert endpoint == "/stock/v1/companyInfo"
+        return {
+            "code": 200,
+            "data": [
+                {
+                    "orgName": "贵州茅台酒股份有限公司",
+                    "industry": "食品饮料-饮料-白酒",
+                    "concepts": "1999-11-20 00:00:00",
+                }
+            ],
+        }
+
+    provider = MianaProvider("token", http_get=fake_get)
+
+    row = provider.fetch_company_profiles("600519.SH")[0]
+
+    assert row["found_date"] == "1999-11-20"
+    assert row["concepts"] is None
+
+
+def test_miana_provider_normalizes_distribution_rows_from_current_endpoint():
+    def fake_get(endpoint, params):
+        assert endpoint == "/stock/v1/distribution"
+        assert params["symbol"] == "sh600519"
+        return {
+            "code": 200,
+            "data": [
+                {
+                    "dividendType": "CASH",
+                    "currency": "CNY",
+                    "cashAmount": 28.02423,
+                    "stockRatio": 0.1,
+                    "announcementDate": "2026-06-22",
+                    "fiscalYear": "2025年报",
+                    "recordDate": "2026-06-25",
+                    "exDividendDate": "2026-06-26",
+                    "paymentDate": "2026-06-26",
+                    "status": "IMPLEMENTED",
+                }
+            ],
+        }
+
+    provider = MianaProvider("token", http_get=fake_get)
+
+    row = provider.fetch_corporate_actions("600519.SH")[0]
+
+    assert row["action_type"] == "CASH"
+    assert row["dividend"] == 28.02423
+    assert row["split_factor"] == 0.1
+    assert row["notice_date"] == "2026-06-22"
+    assert row["report_date"] == "2025年报"
+    assert row["equity_record_date"] == "2026-06-25"
+    assert row["ex_dividend_date"] == "2026-06-26"
+    assert row["pay_cash_date"] == "2026-06-26"
+    assert row["raw_json"]["status"] == "IMPLEMENTED"
+
+
+def test_miana_provider_falls_back_to_legacy_research_endpoints_when_current_paths_are_unavailable():
+    requests = []
+
+    def fake_get(endpoint, params):
+        requests.append(endpoint)
+        if endpoint == "/stock/v1/incomeStatement":
+            raise ValueError("html response")
+        if endpoint == "/stock/v1/incomeSheet":
+            return {"code": 200, "data": [{"reportDate": "2024-12-31", "revenue": 100}]}
+        if endpoint == "/stock/v1/distribution":
+            raise ValueError("html response")
+        if endpoint == "/stock/v1/distribute":
+            return {"code": 200, "data": [{"type": "dividend", "noticeDate": "2025-04-01", "reportDate": "2024A"}]}
+        raise AssertionError(endpoint)
+
+    provider = MianaProvider("token", http_get=fake_get)
+
+    income = provider.fetch_income_statements("600519.SH")
+    actions = provider.fetch_corporate_actions("600519.SH")
+
+    assert income[0]["revenue"] == 100
+    assert actions[0]["action_type"] == "dividend"
+    assert requests == [
+        "/stock/v1/incomeStatement",
+        "/stock/v1/incomeSheet",
+        "/stock/v1/distribution",
+        "/stock/v1/distribute",
+    ]
+
+
 def test_miana_provider_normalizes_holder_officer_index_and_sector_rows():
     def fake_get(endpoint, params):
-        if endpoint == "/stock/v1/top10holders":
-            return {"code": 200, "data": [{"date": "2024-12-31", "name": "Holder A", "rank": 1, "holdVol": 100, "holdRatio": 5.5, "shareType": "A"}]}
-        if endpoint == "/stock/v1/companyOfficer":
-            return {"code": 200, "data": [{"name": "Officer A", "title": "董事长", "startDate": "2024-01-01"}]}
+        if endpoint == "/stock/v1/top10Shareholders":
+            return {
+                "code": 200,
+                "data": {
+                    "shareholders": [
+                        {
+                            "reportDate": "2024-12-31",
+                            "holderName": "Holder A",
+                            "holdAmount": 100,
+                            "holdRatio": 5.5,
+                            "holderType": "一般企业",
+                        }
+                    ]
+                },
+            }
+        if endpoint == "/stock/v1/companyOfficers":
+            return {"code": 200, "data": [{"name": "Officer A", "title": "董事长", "appointmentDate": "2024-01-01", "resignationDate": "2025-01-01", "roleType": "Chairman"}]}
         if endpoint == "/stock/v1/rewards":
-            return {"code": 200, "data": [{"date": "2024-12-31", "name": "Officer A", "title": "董事长", "reward": 100000, "holdVol": 10}]}
+            return {
+                "code": 200,
+                "data": [
+                    {"date": "2024-12-31", "name": "Officer A", "title": "董事长", "compensation": 100000, "shareholding": 10},
+                    {"date": "2024-12-31", "name": "Officer B", "title": "董事", "reward": "", "holdVol": "3706386"},
+                ],
+            }
         if endpoint == "/index/v1/indexList":
             return {"code": 200, "data": [{"code": "000001", "name": "上证指数", "exchangeCode": "XSHG", "countryCode": "CHN"}]}
         if endpoint == "/sector/v1/sectorList":
@@ -314,8 +492,17 @@ def test_miana_provider_normalizes_holder_officer_index_and_sector_rows():
     provider = MianaProvider("token", http_get=fake_get)
 
     assert provider.fetch_top10_holders("000001.SZ")[0]["holder_name"] == "Holder A"
-    assert provider.fetch_company_officers("000001.SZ")[0]["officer_name"] == "Officer A"
-    assert provider.fetch_officer_rewards("000001.SZ")[0]["reward"] == 100000
+    officer = provider.fetch_company_officers("000001.SZ")[0]
+    assert officer["officer_name"] == "Officer A"
+    assert officer["start_date"] == "2024-01-01"
+    assert officer["end_date"] == "2025-01-01"
+    assert officer["raw_json"]["roleType"] == "Chairman"
+    reward = provider.fetch_officer_rewards("000001.SZ")[0]
+    assert reward["reward"] == 100000
+    assert reward["hold_volume"] == 10
+    reward_without_compensation = provider.fetch_officer_rewards("000001.SZ")[1]
+    assert reward_without_compensation["reward"] is None
+    assert reward_without_compensation["hold_volume"] == 3706386
     assert provider.fetch_index_list()[0]["index_code"] == "sh000001"
     assert provider.fetch_sector_list()[0]["sector_code"] == "BK001"
     assert provider.fetch_index_constituents("sh000001")[0]["symbol"] == "600000.SH"

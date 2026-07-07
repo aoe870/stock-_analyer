@@ -259,7 +259,22 @@ def test_mysql_repository_persists_miana_side_data_and_raw_payloads():
         ]
     )
     repo.upsert_stock_company_profiles(
-        [{"symbol": "TST001.SZ", "provider": "miana", "industry": "Software", "region": "SZ", "raw_json": {"industry": "Software"}}]
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": "miana",
+                "company_name": "Test One Corp",
+                "industry": "Software",
+                "region": "SZ",
+                "found_date": "2001-02-03",
+                "registered_capital": 123456,
+                "employee_count": 789,
+                "accounting_firm": "Audit LLP",
+                "legal_adviser": "Law Firm",
+                "company_profile": "Short profile",
+                "raw_json": {"industry": "Software"},
+            }
+        ]
     )
     repo.upsert_corporate_actions(
         [
@@ -322,8 +337,19 @@ def test_mysql_repository_persists_miana_side_data_and_raw_payloads():
         with connection.cursor() as cursor:
             cursor.execute("SELECT provider_symbol, industry FROM stock_provider_profiles WHERE symbol=%s AND provider=%s", ("TST001.SZ", "miana"))
             assert cursor.fetchone() == {"provider_symbol": "szTST001", "industry": "Software"}
-            cursor.execute("SELECT industry FROM stock_company_profiles WHERE symbol=%s AND provider=%s", ("TST001.SZ", "miana"))
-            assert cursor.fetchone()["industry"] == "Software"
+            cursor.execute(
+                "SELECT company_name, industry, found_date, registered_capital, employee_count, accounting_firm, legal_adviser, company_profile FROM stock_company_profiles WHERE symbol=%s AND provider=%s",
+                ("TST001.SZ", "miana"),
+            )
+            profile = cursor.fetchone()
+            assert profile["company_name"] == "Test One Corp"
+            assert profile["industry"] == "Software"
+            assert str(profile["found_date"]) == "2001-02-03"
+            assert float(profile["registered_capital"]) == 123456
+            assert profile["employee_count"] == 789
+            assert profile["accounting_firm"] == "Audit LLP"
+            assert profile["legal_adviser"] == "Law Firm"
+            assert profile["company_profile"] == "Short profile"
             cursor.execute("SELECT action_type, dividend FROM corporate_actions WHERE symbol=%s AND provider=%s", ("TST001.SZ", "miana"))
             action = cursor.fetchone()
             assert action["action_type"] == "dividend"
@@ -439,6 +465,168 @@ def test_mysql_repository_persists_v2_research_and_market_structure_data():
     repo._execute("DELETE FROM latest_sector_quotes WHERE provider=%s", (provider,))
     repo._execute("DELETE FROM market_indexes WHERE provider=%s", (provider,))
     repo._execute("DELETE FROM market_sectors WHERE provider=%s", (provider,))
+
+
+def test_stock_research_snapshot_returns_enterprise_modules_and_summaries():
+    repo = repository()
+    provider = "unit_enterprise_detail"
+    repo.upsert_stocks([{"symbol": "TST001.SZ", "exchange": "SZ", "name": "Enterprise One", "source": provider}])
+    repo.upsert_stock_company_profiles(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": provider,
+                "industry": "Software",
+                "region": "SZ",
+                "chairman": "Chair A",
+                "main_business": "Enterprise software",
+                "raw_json": {"industry": "Software"},
+            }
+        ]
+    )
+    repo.upsert_corporate_actions(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": provider,
+                "action_type": "dividend",
+                "currency": "CNY",
+                "dividend": 1.23,
+                "notice_date": "2024-05-01",
+                "report_date": "2023",
+                "raw_json": {"type": "dividend"},
+            }
+        ]
+    )
+    repo.upsert_share_capital_history(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": provider,
+                "end_date": "2024-01-01",
+                "total_shares": 1000,
+                "floating_shares": 900,
+                "limited_shares": 100,
+                "change_reason": "initial",
+                "raw_json": {"totalShares": 1000},
+            }
+        ]
+    )
+    repo.upsert_income_statements(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": provider,
+                "report_date": "2024-12-31",
+                "notice_date": "2025-04-01",
+                "report_period": "2024A",
+                "currency": "CNY",
+                "revenue": 100,
+                "net_profit": 20,
+                "raw_json": {"revenue": 100},
+            }
+        ]
+    )
+    repo.upsert_balance_sheets(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": provider,
+                "report_date": "2024-12-31",
+                "report_period": "2024A",
+                "total_assets": 1000,
+                "total_liabilities": 400,
+                "total_equity": 600,
+                "raw_json": {"totalAssets": 1000},
+            }
+        ]
+    )
+    repo.upsert_cashflow_statements(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": provider,
+                "report_date": "2024-12-31",
+                "report_period": "2024A",
+                "net_operating_cashflow": 50,
+                "raw_json": {"netOperatingCashflow": 50},
+            }
+        ]
+    )
+    repo.upsert_stock_top10_holders(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": provider,
+                "report_date": "2024-12-31",
+                "holder_name": "Holder A",
+                "holder_rank": 1,
+                "hold_volume": 100,
+                "hold_ratio": 5.5,
+                "share_type": "A",
+                "raw_json": {"name": "Holder A"},
+            }
+        ]
+    )
+    repo.upsert_stock_company_officers(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": provider,
+                "officer_name": "Officer A",
+                "title": "CEO",
+                "start_date": "2020-01-01",
+                "raw_json": {"name": "Officer A"},
+            }
+        ]
+    )
+    repo.upsert_stock_officer_rewards(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": provider,
+                "report_date": "2024-12-31",
+                "officer_name": "Officer A",
+                "title": "CEO",
+                "reward": 100000,
+                "hold_volume": 200,
+                "raw_json": {"reward": 100000},
+            }
+        ]
+    )
+    repo.upsert_daily_money_flow(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": provider,
+                "trade_date": "2024-01-02",
+                "amount": 10000,
+                "main_net_inflow_amount": 500,
+                "main_net_ratio": 0.05,
+                "super_large_inflow": 1000,
+                "super_large_outflow": 500,
+                "raw_json": {"amount": 10000},
+            }
+        ]
+    )
+
+    overview = repo.stock_research_snapshot("TST001.SZ")
+    financials = repo.stock_financials("TST001.SZ")
+    capital_flow = repo.stock_capital_flow("TST001.SZ")
+    coverage = repo.data_center_coverage()
+
+    assert overview["officer_rewards"][0]["reward"] == 100000.0
+    assert overview["data_quality"]["enterprise_modules"]["company_profile"]["status"] == "synced"
+    assert overview["data_quality"]["enterprise_modules"]["officer_rewards"]["rows"] == 1
+    assert financials["summary"] == {
+        "latest_report_date": "2024-12-31",
+        "income_rows": 1,
+        "balance_rows": 1,
+        "cashflow_rows": 1,
+    }
+    assert capital_flow["summary"] == {"latest_trade_date": "2024-01-02", "rows": 1}
+    for key in ["corporate_actions", "share_capital", "officers", "officer_rewards"]:
+        assert coverage["research"][key]["rows"] >= 1
 
 
 def test_latest_sector_quotes_replace_previous_provider_snapshot():

@@ -103,6 +103,67 @@ def test_frontend_v2_uses_market_stock_research_and_data_center_apis():
         assert copy in js
 
 
+def test_frontend_stock_detail_exposes_enterprise_research_tabs():
+    js = read_public("app.js")
+
+    for label in ["财务三表", "企业资料", "股东高管", "分红股本", "资金流", "数据状态", "十大股东", "董监高", "薪酬持股"]:
+        assert label in js
+
+    for marker in [
+        "stockEnterpriseActiveTab",
+        "stockOverview.officer_rewards",
+        "stockOverview.data_quality?.enterprise_modules",
+        "stockFinancials.summary",
+        "stockCapitalFlow.summary",
+        "enterpriseModuleStatus",
+        "officer_rewards",
+        "corporate_actions",
+        "share_capital",
+    ]:
+        assert marker in js
+
+
+def test_frontend_company_profile_shows_miana_v1_company_info_fields():
+    js = read_public("app.js")
+
+    for label in ["机构名称", "成立日期", "注册资本", "员工数量", "会计师事务所", "法律顾问", "公司简介"]:
+        assert label in js
+
+    for marker in [
+        "stockOverview.company_profile.company_name",
+        "stockOverview.company_profile.found_date",
+        "stockOverview.company_profile.registered_capital",
+        "stockOverview.company_profile.employee_count",
+        "stockOverview.company_profile.accounting_firm",
+        "stockOverview.company_profile.legal_adviser",
+        "stockOverview.company_profile.company_profile",
+    ]:
+        assert marker in js
+
+
+def test_frontend_officer_table_uses_miana_title_field_for_position():
+    js = read_public("app.js")
+
+    assert '<el-table-column prop="title" label="职务"' in js
+
+
+def test_frontend_officer_reward_table_uses_backend_title_and_hold_volume_fields():
+    js = read_public("app.js")
+
+    assert '<el-table-column prop="title" label="职务" />' in js
+    assert '<el-table-column prop="hold_volume" label="持股数"' in js
+
+
+def test_frontend_lazy_loads_enterprise_people_tab_with_refresh_missing_flag():
+    js = read_public("app.js")
+
+    assert '@tab-change="handleEnterpriseTabChange"' in js
+    assert "async handleEnterpriseTabChange(tabName)" in js
+    assert 'if (tabName !== "people") return;' in js
+    assert 'this.loadStockOverview(symbol, true)' in js
+    assert 'const query = refreshMissing ? "?refresh_missing=true" : "";' in js
+
+
 def test_frontend_reuses_recent_market_dashboard_payload_between_route_switches():
     js = read_public("app.js")
 

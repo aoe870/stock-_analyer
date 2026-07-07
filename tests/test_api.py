@@ -375,8 +375,113 @@ def test_stock_research_endpoints_return_stable_shapes():
 
     assert overview["stock"]["symbol"] == symbol
     assert "latest_bar" in overview
-    assert {"income", "balance", "cashflow"} <= set(financials)
-    assert capital_flow == {"symbol": symbol, "rows": []}
+    assert {"share_capital", "corporate_actions", "holders", "officers", "officer_rewards"} <= set(overview)
+    assert "enterprise_modules" in overview["data_quality"]
+    assert {"income", "balance", "cashflow", "summary"} <= set(financials)
+    assert financials["summary"] == {"latest_report_date": None, "income_rows": 0, "balance_rows": 0, "cashflow_rows": 0}
+    assert capital_flow == {"symbol": symbol, "rows": [], "summary": {"latest_trade_date": None, "rows": 0}}
+
+
+def test_stock_overview_does_not_auto_refresh_missing_enterprise_research_by_default(monkeypatch):
+    captured = {}
+
+    class Repository:
+        synced = False
+
+        def stock_research_snapshot(self, symbol):
+            base = {
+                "stock": {"symbol": symbol},
+                "latest_bar": None,
+                "company_profile": None,
+                "share_capital": [],
+                "corporate_actions": [],
+                "holders": [],
+                "officer_rewards": [],
+                "data_quality": {
+                    "has_bars": False,
+                    "has_research_data": self.synced,
+                    "enterprise_modules": {
+                        "company_profile": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                        "share_capital": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                        "corporate_actions": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                        "holders": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                        "officers": {"rows": 1 if self.synced else 0, "status": "synced" if self.synced else "missing", "newest_date": None, "provider": "miana" if self.synced else None},
+                        "officer_rewards": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                        "capital_flow": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                    },
+                },
+            }
+            base["officers"] = [{"officer_name": "Officer A", "title": "董事长"}] if self.synced else []
+            return base
+
+    repository = Repository()
+
+    class Pipeline:
+        def run_fundamental_refresh_pipeline(self, requested_by, symbols=None):
+            captured["requested_by"] = requested_by
+            captured["symbols"] = symbols
+            repository.synced = True
+            return {"id": 88, "status": "completed", "summary": {"success": 1, "metadata_errors": 0}}
+
+    runtime.analysis_repository = repository
+    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: Pipeline())
+
+    response = client.get("/api/stocks/AAA.SZ/overview")
+
+    assert response.status_code == 200
+    assert captured == {}
+    assert response.json()["officers"] == []
+
+
+def test_stock_overview_refresh_missing_triggers_enterprise_research_once(monkeypatch):
+    captured = {}
+
+    class Repository:
+        synced = False
+
+        def stock_research_snapshot(self, symbol):
+            base = {
+                "stock": {"symbol": symbol},
+                "latest_bar": None,
+                "company_profile": None,
+                "share_capital": [],
+                "corporate_actions": [],
+                "holders": [],
+                "officer_rewards": [],
+                "data_quality": {
+                    "has_bars": False,
+                    "has_research_data": self.synced,
+                    "enterprise_modules": {
+                        "company_profile": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                        "share_capital": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                        "corporate_actions": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                        "holders": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                        "officers": {"rows": 1 if self.synced else 0, "status": "synced" if self.synced else "missing", "newest_date": None, "provider": "miana" if self.synced else None},
+                        "officer_rewards": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                        "capital_flow": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                    },
+                },
+            }
+            base["officers"] = [{"officer_name": "Officer A", "title": "董事长"}] if self.synced else []
+            return base
+
+    repository = Repository()
+
+    class Pipeline:
+        def run_fundamental_refresh_pipeline(self, requested_by, symbols=None):
+            captured["requested_by"] = requested_by
+            captured["symbols"] = symbols
+            repository.synced = True
+            return {"id": 88, "status": "completed", "summary": {"success": 1, "metadata_errors": 0}}
+
+    runtime.analysis_repository = repository
+    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: Pipeline())
+
+    response = client.get("/api/stocks/AAA.SZ/overview?refresh_missing=true")
+
+    assert response.status_code == 200
+    assert captured == {"requested_by": "overview:auto:AAA.SZ", "symbols": ["AAA.SZ"]}
+    assert response.json()["officers"] == [{"officer_name": "Officer A", "title": "董事长"}]
 
 
 def test_data_center_coverage_endpoint_returns_v2_sections():
@@ -387,6 +492,8 @@ def test_data_center_coverage_endpoint_returns_v2_sections():
     assert {"core", "research", "market_structure", "sync"} <= set(payload)
     assert "analysis_daily_bars" in payload["core"]
     assert "financial_statements" in payload["research"]
+    for key in ["corporate_actions", "share_capital", "holders", "officers", "officer_rewards"]:
+        assert key in payload["research"]
 
 
 def test_stock_bars_refresh_triggers_single_symbol_detail_sync(monkeypatch):

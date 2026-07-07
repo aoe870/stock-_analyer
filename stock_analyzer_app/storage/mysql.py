@@ -225,22 +225,34 @@ class MySqlRepository:
     def upsert_stock_company_profiles(self, rows: list[dict]) -> None:
         sql = """
             INSERT INTO stock_company_profiles
-                (symbol, provider, industry, region, concepts, address, legal_person, chairman, president,
-                 secretary, org_tel, org_email, org_web, org_profile, main_business, raw_json)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (symbol, provider, company_name, industry, region, found_date, registered_capital,
+                 employee_count, accounting_firm, legal_adviser, concepts, address, legal_person,
+                 chairman, president, secretary, org_tel, org_email, org_web, org_profile,
+                 company_profile, main_business, raw_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
-                industry=VALUES(industry), region=VALUES(region), concepts=VALUES(concepts), address=VALUES(address),
+                company_name=VALUES(company_name), industry=VALUES(industry), region=VALUES(region),
+                found_date=VALUES(found_date), registered_capital=VALUES(registered_capital),
+                employee_count=VALUES(employee_count), accounting_firm=VALUES(accounting_firm),
+                legal_adviser=VALUES(legal_adviser), concepts=VALUES(concepts), address=VALUES(address),
                 legal_person=VALUES(legal_person), chairman=VALUES(chairman), president=VALUES(president),
                 secretary=VALUES(secretary), org_tel=VALUES(org_tel), org_email=VALUES(org_email),
-                org_web=VALUES(org_web), org_profile=VALUES(org_profile), main_business=VALUES(main_business),
+                org_web=VALUES(org_web), org_profile=VALUES(org_profile), company_profile=VALUES(company_profile),
+                main_business=VALUES(main_business),
                 raw_json=VALUES(raw_json)
         """
         values = [
             (
                 row["symbol"],
                 row.get("provider", row.get("source", "unknown")),
+                row.get("company_name"),
                 row.get("industry"),
                 row.get("region"),
+                row.get("found_date"),
+                row.get("registered_capital"),
+                row.get("employee_count"),
+                row.get("accounting_firm"),
+                row.get("legal_adviser"),
                 row.get("concepts"),
                 row.get("address"),
                 row.get("legal_person"),
@@ -251,6 +263,7 @@ class MySqlRepository:
                 row.get("org_email"),
                 row.get("org_web"),
                 row.get("org_profile"),
+                row.get("company_profile"),
                 row.get("main_business"),
                 _json_text(row.get("raw_json", {})),
             )
@@ -856,32 +869,83 @@ class MySqlRepository:
                 return rows
 
     def stock_financials(self, symbol: str) -> dict:
+        income = self._select_symbol_rows("income_statements", symbol, "report_date DESC")
+        balance = self._select_symbol_rows("balance_sheets", symbol, "report_date DESC")
+        cashflow = self._select_symbol_rows("cashflow_statements", symbol, "report_date DESC")
+        report_dates = [row.get("report_date") for row in [*income, *balance, *cashflow] if row.get("report_date")]
         return {
             "symbol": symbol,
-            "income": self._select_symbol_rows("income_statements", symbol, "report_date DESC"),
-            "balance": self._select_symbol_rows("balance_sheets", symbol, "report_date DESC"),
-            "cashflow": self._select_symbol_rows("cashflow_statements", symbol, "report_date DESC"),
+            "income": income,
+            "balance": balance,
+            "cashflow": cashflow,
+            "summary": {
+                "latest_report_date": max(report_dates) if report_dates else None,
+                "income_rows": len(income),
+                "balance_rows": len(balance),
+                "cashflow_rows": len(cashflow),
+            },
         }
 
     def stock_capital_flow(self, symbol: str) -> dict:
-        return {"symbol": symbol, "rows": self._select_symbol_rows("daily_money_flow", symbol, "trade_date DESC")}
+        rows = self._select_symbol_rows("daily_money_flow", symbol, "trade_date DESC")
+        return {
+            "symbol": symbol,
+            "rows": rows,
+            "summary": {
+                "latest_trade_date": rows[0].get("trade_date") if rows else None,
+                "rows": len(rows),
+            },
+        }
+
+    def _enterprise_module_status(self, symbol: str, table: str, date_column: str | None = None) -> dict:
+        date_expr = f"MAX({date_column})" if date_column else "NULL"
+        row = self._select_rows(
+            f"""
+            SELECT COUNT(*) AS rows_count, {date_expr} AS newest_date, MIN(provider) AS provider
+            FROM {table}
+            WHERE symbol=%s
+            """,
+            (symbol,),
+        )[0]
+        rows_count = int(row["rows_count"])
+        return {
+            "rows": rows_count,
+            "status": "synced" if rows_count else "missing",
+            "newest_date": row.get("newest_date"),
+            "provider": row.get("provider"),
+        }
+
+    def _enterprise_module_statuses(self, symbol: str) -> dict:
+        return {
+            "company_profile": self._enterprise_module_status(symbol, "stock_company_profiles"),
+            "share_capital": self._enterprise_module_status(symbol, "share_capital_history", "end_date"),
+            "corporate_actions": self._enterprise_module_status(symbol, "corporate_actions", "notice_date"),
+            "holders": self._enterprise_module_status(symbol, "stock_top10_holders", "report_date"),
+            "officers": self._enterprise_module_status(symbol, "stock_company_officers"),
+            "officer_rewards": self._enterprise_module_status(symbol, "stock_officer_rewards", "report_date"),
+            "capital_flow": self._enterprise_module_status(symbol, "daily_money_flow", "trade_date"),
+        }
 
     def stock_research_snapshot(self, symbol: str) -> dict:
         stock = self.get_stock(symbol)
         if not stock:
             raise KeyError(symbol)
         bars = self.bars(symbol)
+        company_profile = self._first_symbol_row("stock_company_profiles", symbol)
+        enterprise_modules = self._enterprise_module_statuses(symbol)
         return {
             "stock": stock,
             "latest_bar": bars[-1] if bars else None,
-            "company_profile": self._first_symbol_row("stock_company_profiles", symbol),
+            "company_profile": company_profile,
             "share_capital": self._select_symbol_rows("share_capital_history", symbol, "end_date DESC"),
             "corporate_actions": self._select_symbol_rows("corporate_actions", symbol, "notice_date DESC"),
             "holders": self._select_symbol_rows("stock_top10_holders", symbol, "report_date DESC, holder_rank ASC"),
             "officers": self._select_symbol_rows("stock_company_officers", symbol, "officer_name ASC"),
+            "officer_rewards": self._select_symbol_rows("stock_officer_rewards", symbol, "report_date DESC, reward DESC"),
             "data_quality": {
                 "has_bars": bool(bars),
-                "has_research_data": bool(self._first_symbol_row("stock_company_profiles", symbol)),
+                "has_research_data": any(item["rows"] for item in enterprise_modules.values()),
+                "enterprise_modules": enterprise_modules,
             },
         }
 
@@ -981,7 +1045,11 @@ class MySqlRepository:
                 "financial_statements": {"rows": self._count_rows("income_statements") + self._count_rows("balance_sheets") + self._count_rows("cashflow_statements")},
                 "capital_flow": self._count_symbols_and_rows("daily_money_flow"),
                 "company_profiles": self._count_symbols_and_rows("stock_company_profiles"),
+                "corporate_actions": self._count_symbols_and_rows("corporate_actions"),
+                "share_capital": self._count_symbols_and_rows("share_capital_history"),
                 "holders": self._count_symbols_and_rows("stock_top10_holders"),
+                "officers": self._count_symbols_and_rows("stock_company_officers"),
+                "officer_rewards": self._count_symbols_and_rows("stock_officer_rewards"),
             },
             "market_structure": {
                 "indexes": {"rows": self._count_rows("market_indexes")},

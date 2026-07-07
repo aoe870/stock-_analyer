@@ -177,10 +177,14 @@ const app = Vue.createApp({
               <el-col :span="8"><el-card><template #header>基本信息</template><el-descriptions :column="1" border><el-descriptions-item label="开盘">{{ formatNumber(latestBar.open) }}</el-descriptions-item><el-descriptions-item label="最高">{{ formatNumber(latestBar.high) }}</el-descriptions-item><el-descriptions-item label="最低">{{ formatNumber(latestBar.low) }}</el-descriptions-item><el-descriptions-item label="收盘">{{ formatNumber(latestBar.close) }}</el-descriptions-item><el-descriptions-item label="成交量">{{ formatInt(latestBar.volume) }}</el-descriptions-item><el-descriptions-item label="价格模式">{{ priceModeLabel(latestBar.price_mode) }}</el-descriptions-item></el-descriptions></el-card></el-col>
               <el-col :span="12"><el-card><template #header>策略信号</template><el-table :data="stockSignals.slice(-20).reverse()" height="320"><el-table-column prop="trade_date" label="日期" /><el-table-column prop="selected_signal" label="信号" :formatter="signalFormatter" /><el-table-column prop="trend_state" label="趋势" :formatter="trendFormatter" /></el-table></el-card></el-col>
               <el-col :span="12"><el-card><template #header>最近日线</template><el-table :data="stockBars.slice(-40).reverse()" height="320"><el-table-column prop="trade_date" label="日期" /><el-table-column prop="close" label="收盘" align="right" :formatter="numberFormatter" /><el-table-column prop="data_quality" label="质量" :formatter="qualityFormatter" /></el-table></el-card></el-col>
-              <el-col :span="12"><el-card><template #header>财务摘要</template><el-tabs><el-tab-pane label="利润表"><el-table :data="stockFinancials.income || []" height="260"><el-table-column prop="report_date" label="报告期" /><el-table-column prop="revenue" label="营收" align="right" :formatter="numberFormatter" /><el-table-column prop="net_profit" label="净利润" align="right" :formatter="numberFormatter" /></el-table></el-tab-pane><el-tab-pane label="资产负债"><el-table :data="stockFinancials.balance || []" height="260"><el-table-column prop="report_date" label="报告期" /><el-table-column prop="total_assets" label="资产" align="right" :formatter="numberFormatter" /><el-table-column prop="total_liabilities" label="负债" align="right" :formatter="numberFormatter" /></el-table></el-tab-pane><el-tab-pane label="现金流"><el-table :data="stockFinancials.cashflow || []" height="260"><el-table-column prop="report_date" label="报告期" /><el-table-column prop="net_operating_cashflow" label="经营现金流" align="right" :formatter="numberFormatter" /></el-table></el-tab-pane></el-tabs></el-card></el-col>
-              <el-col :span="12"><el-card><template #header>资金流</template><el-empty v-if="!stockCapitalFlow.rows.length" description="暂无资金流数据" /><el-table v-else :data="stockCapitalFlow.rows" height="300"><el-table-column prop="trade_date" label="日期" /><el-table-column prop="main_net_inflow_amount" label="主力净流入" align="right" :formatter="numberFormatter" /><el-table-column prop="main_net_ratio" label="净比" align="right" :formatter="percentColumnFormatter" /></el-table></el-card></el-col>
-              <el-col :span="12"><el-card><template #header>公司资料</template><el-empty v-if="!stockOverview.company_profile" description="暂无公司资料" /><el-descriptions v-else :column="1" border><el-descriptions-item label="行业">{{ stockOverview.company_profile.industry || '-' }}</el-descriptions-item><el-descriptions-item label="地区">{{ stockOverview.company_profile.region || '-' }}</el-descriptions-item><el-descriptions-item label="董事长">{{ stockOverview.company_profile.chairman || '-' }}</el-descriptions-item><el-descriptions-item label="主营业务">{{ stockOverview.company_profile.main_business || '-' }}</el-descriptions-item></el-descriptions></el-card></el-col>
-              <el-col :span="12"><el-card><template #header>分红与股本</template><el-tabs><el-tab-pane label="分红送配"><el-empty v-if="!stockOverview.corporate_actions.length" description="暂无分红送配" /><el-table v-else :data="stockOverview.corporate_actions" height="260"><el-table-column prop="notice_date" label="公告日" /><el-table-column prop="action_type" label="类型" /><el-table-column prop="dividend" label="分红" align="right" :formatter="numberFormatter" /><el-table-column prop="ex_dividend_date" label="除权日" /></el-table></el-tab-pane><el-tab-pane label="股本历史"><el-empty v-if="!stockOverview.share_capital.length" description="暂无股本历史" /><el-table v-else :data="stockOverview.share_capital" height="260"><el-table-column prop="end_date" label="日期" /><el-table-column prop="total_shares" label="总股本" align="right" :formatter="numberFormatter" /><el-table-column prop="floating_shares" label="流通股本" align="right" :formatter="numberFormatter" /></el-table></el-tab-pane></el-tabs></el-card></el-col>
+              <el-col :span="24"><el-card><template #header>企业研究</template><el-tabs v-model="stockEnterpriseActiveTab" @tab-change="handleEnterpriseTabChange">
+                <el-tab-pane label="财务三表" name="financials"><el-descriptions :column="4" border class="enterprise-summary"><el-descriptions-item label="最新报告期">{{ stockFinancials.summary?.latest_report_date || '-' }}</el-descriptions-item><el-descriptions-item label="利润表">{{ formatInt(stockFinancials.summary?.income_rows) }}</el-descriptions-item><el-descriptions-item label="资产负债表">{{ formatInt(stockFinancials.summary?.balance_rows) }}</el-descriptions-item><el-descriptions-item label="现金流量表">{{ formatInt(stockFinancials.summary?.cashflow_rows) }}</el-descriptions-item></el-descriptions><el-tabs><el-tab-pane label="利润表"><el-table :data="stockFinancials.income || []" height="280"><el-table-column prop="report_date" label="报告期" /><el-table-column prop="revenue" label="营收" align="right" :formatter="numberFormatter" /><el-table-column prop="net_profit" label="净利润" align="right" :formatter="numberFormatter" /></el-table></el-tab-pane><el-tab-pane label="资产负债"><el-table :data="stockFinancials.balance || []" height="280"><el-table-column prop="report_date" label="报告期" /><el-table-column prop="total_assets" label="资产" align="right" :formatter="numberFormatter" /><el-table-column prop="total_liabilities" label="负债" align="right" :formatter="numberFormatter" /></el-table></el-tab-pane><el-tab-pane label="现金流"><el-table :data="stockFinancials.cashflow || []" height="280"><el-table-column prop="report_date" label="报告期" /><el-table-column prop="net_operating_cashflow" label="经营现金流" align="right" :formatter="numberFormatter" /></el-table></el-tab-pane></el-tabs></el-tab-pane>
+                <el-tab-pane label="企业资料" name="profile"><el-empty v-if="!stockOverview.company_profile" description="暂无公司资料" /><el-descriptions v-else :column="2" border><el-descriptions-item label="机构名称">{{ stockOverview.company_profile.company_name || '-' }}</el-descriptions-item><el-descriptions-item label="行业">{{ stockOverview.company_profile.industry || '-' }}</el-descriptions-item><el-descriptions-item label="地区">{{ stockOverview.company_profile.region || '-' }}</el-descriptions-item><el-descriptions-item label="成立日期">{{ stockOverview.company_profile.found_date || '-' }}</el-descriptions-item><el-descriptions-item label="董事长">{{ stockOverview.company_profile.chairman || '-' }}</el-descriptions-item><el-descriptions-item label="总裁">{{ stockOverview.company_profile.president || '-' }}</el-descriptions-item><el-descriptions-item label="法定代表人">{{ stockOverview.company_profile.legal_person || '-' }}</el-descriptions-item><el-descriptions-item label="董秘">{{ stockOverview.company_profile.secretary || '-' }}</el-descriptions-item><el-descriptions-item label="注册资本">{{ formatLargeNumber(stockOverview.company_profile.registered_capital) }}</el-descriptions-item><el-descriptions-item label="员工数量">{{ formatInt(stockOverview.company_profile.employee_count) }}</el-descriptions-item><el-descriptions-item label="会计师事务所">{{ stockOverview.company_profile.accounting_firm || '-' }}</el-descriptions-item><el-descriptions-item label="法律顾问">{{ stockOverview.company_profile.legal_adviser || '-' }}</el-descriptions-item><el-descriptions-item label="电话">{{ stockOverview.company_profile.org_tel || '-' }}</el-descriptions-item><el-descriptions-item label="邮箱">{{ stockOverview.company_profile.org_email || '-' }}</el-descriptions-item><el-descriptions-item label="网站">{{ stockOverview.company_profile.org_web || '-' }}</el-descriptions-item><el-descriptions-item label="地址">{{ stockOverview.company_profile.address || '-' }}</el-descriptions-item><el-descriptions-item label="主营业务" :span="2">{{ stockOverview.company_profile.main_business || '-' }}</el-descriptions-item><el-descriptions-item label="公司简介" :span="2">{{ stockOverview.company_profile.company_profile || stockOverview.company_profile.org_profile || stockOverview.company_profile.description || '-' }}</el-descriptions-item></el-descriptions></el-tab-pane>
+                <el-tab-pane label="股东高管" name="people"><el-tabs><el-tab-pane label="十大股东"><el-empty v-if="!stockOverview.holders.length" description="暂无十大股东" /><el-table v-else :data="stockOverview.holders" height="300"><el-table-column prop="report_date" label="报告期" width="110" /><el-table-column prop="holder_rank" label="排名" width="70" align="right" /><el-table-column prop="holder_name" label="股东名称" /><el-table-column prop="shareholding_amount" label="持股数" align="right" :formatter="largeNumberFormatter" /><el-table-column prop="shareholding_ratio" label="持股比例" align="right" :formatter="percentColumnFormatter" /></el-table></el-tab-pane><el-tab-pane label="董监高"><el-empty v-if="!stockOverview.officers.length" description="暂无董监高" /><el-table v-else :data="stockOverview.officers" height="300"><el-table-column prop="officer_name" label="姓名" /><el-table-column prop="title" label="职务" /><el-table-column prop="gender" label="性别" width="80" /><el-table-column prop="age" label="年龄" width="80" align="right" /><el-table-column prop="term_start_date" label="任期开始" /></el-table></el-tab-pane><el-tab-pane label="薪酬持股"><el-empty v-if="!stockOverview.officer_rewards.length" description="暂无薪酬持股" /><el-table v-else :data="stockOverview.officer_rewards" height="300"><el-table-column prop="report_date" label="报告期" /><el-table-column prop="officer_name" label="姓名" /><el-table-column prop="title" label="职务" /><el-table-column prop="reward" label="薪酬" align="right" :formatter="largeNumberFormatter" /><el-table-column prop="hold_volume" label="持股数" align="right" :formatter="largeNumberFormatter" /></el-table></el-tab-pane></el-tabs></el-tab-pane>
+                <el-tab-pane label="分红股本" name="capital" data-copy="分红与股本"><el-tabs><el-tab-pane label="分红送配"><el-empty v-if="!stockOverview.corporate_actions.length" description="暂无分红送配" /><el-table v-else :data="stockOverview.corporate_actions" height="300"><el-table-column prop="notice_date" label="公告日" /><el-table-column prop="action_type" label="类型" /><el-table-column prop="dividend" label="分红" align="right" :formatter="numberFormatter" /><el-table-column prop="ex_dividend_date" label="除权日" /></el-table></el-tab-pane><el-tab-pane label="股本历史"><el-empty v-if="!stockOverview.share_capital.length" description="暂无股本历史" /><el-table v-else :data="stockOverview.share_capital" height="300"><el-table-column prop="end_date" label="日期" /><el-table-column prop="total_shares" label="总股本" align="right" :formatter="largeNumberFormatter" /><el-table-column prop="floating_shares" label="流通股本" align="right" :formatter="largeNumberFormatter" /></el-table></el-tab-pane></el-tabs></el-tab-pane>
+                <el-tab-pane label="资金流" name="moneyflow"><el-descriptions :column="2" border class="enterprise-summary"><el-descriptions-item label="最新交易日">{{ stockCapitalFlow.summary?.latest_trade_date || '-' }}</el-descriptions-item><el-descriptions-item label="记录数">{{ formatInt(stockCapitalFlow.summary?.rows) }}</el-descriptions-item></el-descriptions><el-empty v-if="!stockCapitalFlow.rows.length" description="暂无资金流数据" /><el-table v-else :data="stockCapitalFlow.rows" height="300"><el-table-column prop="trade_date" label="日期" /><el-table-column prop="main_net_inflow_amount" label="主力净流入" align="right" :formatter="largeNumberFormatter" /><el-table-column prop="main_net_ratio" label="净比" align="right" :formatter="percentColumnFormatter" /></el-table></el-tab-pane>
+                <el-tab-pane label="数据状态" name="status"><el-descriptions :column="2" border><el-descriptions-item label="公司资料">{{ enterpriseModuleStatusLabel('company_profile') }} / {{ formatInt(enterpriseModuleStatus('company_profile').rows) }}</el-descriptions-item><el-descriptions-item label="分红送配">{{ enterpriseModuleStatusLabel('corporate_actions') }} / {{ formatInt(enterpriseModuleStatus('corporate_actions').rows) }}</el-descriptions-item><el-descriptions-item label="股本历史">{{ enterpriseModuleStatusLabel('share_capital') }} / {{ formatInt(enterpriseModuleStatus('share_capital').rows) }}</el-descriptions-item><el-descriptions-item label="十大股东">{{ enterpriseModuleStatusLabel('holders') }} / {{ formatInt(enterpriseModuleStatus('holders').rows) }}</el-descriptions-item><el-descriptions-item label="董监高">{{ enterpriseModuleStatusLabel('officers') }} / {{ formatInt(enterpriseModuleStatus('officers').rows) }}</el-descriptions-item><el-descriptions-item label="薪酬持股">{{ enterpriseModuleStatusLabel('officer_rewards') }} / {{ formatInt(enterpriseModuleStatus('officer_rewards').rows) }}</el-descriptions-item><el-descriptions-item label="资金流">{{ enterpriseModuleStatusLabel('capital_flow') }} / {{ formatInt(enterpriseModuleStatus('capital_flow').rows) }}</el-descriptions-item></el-descriptions></el-tab-pane>
+              </el-tabs></el-card></el-col>
             </el-row>
           </section>
 
@@ -188,7 +192,7 @@ const app = Vue.createApp({
             <el-card class="page-header"><h2>数据中心</h2><p>查看底层数据覆盖率、研究数据状态和同步任务健康度。</p></el-card>
             <el-row :gutter="20">
               <el-col :span="8"><el-card class="glass-card"><template #header>核心行情</template><el-descriptions :column="1" border><el-descriptions-item label="分析日线">{{ formatInt(dataCenterCoverage.core?.analysis_daily_bars?.rows) }}</el-descriptions-item><el-descriptions-item label="最新交易日">{{ dataCenterCoverage.sync?.readiness?.latest_trade_date || '-' }}</el-descriptions-item><el-descriptions-item label="缺失股票">{{ formatInt(dataCenterCoverage.sync?.readiness?.missing_symbol_count) }}</el-descriptions-item></el-descriptions></el-card></el-col>
-              <el-col :span="8"><el-card class="glass-card"><template #header>研究数据</template><el-descriptions :column="1" border><el-descriptions-item label="财务报表">{{ formatInt(dataCenterCoverage.research?.financial_statements?.rows) }}</el-descriptions-item><el-descriptions-item label="资金流">{{ formatInt(dataCenterCoverage.research?.capital_flow?.rows) }}</el-descriptions-item><el-descriptions-item label="公司资料">{{ formatInt(dataCenterCoverage.research?.company_profiles?.rows) }}</el-descriptions-item></el-descriptions></el-card></el-col>
+              <el-col :span="8"><el-card class="glass-card"><template #header>研究数据</template><el-descriptions :column="1" border><el-descriptions-item label="财务报表">{{ formatInt(dataCenterCoverage.research?.financial_statements?.rows) }}</el-descriptions-item><el-descriptions-item label="资金流">{{ formatInt(dataCenterCoverage.research?.capital_flow?.rows) }}</el-descriptions-item><el-descriptions-item label="公司资料">{{ formatInt(dataCenterCoverage.research?.company_profiles?.rows) }}</el-descriptions-item><el-descriptions-item label="分红送配">{{ formatInt(dataCenterCoverage.research?.corporate_actions?.rows) }}</el-descriptions-item><el-descriptions-item label="股本历史">{{ formatInt(dataCenterCoverage.research?.share_capital?.rows) }}</el-descriptions-item><el-descriptions-item label="十大股东">{{ formatInt(dataCenterCoverage.research?.holders?.rows) }}</el-descriptions-item><el-descriptions-item label="董监高">{{ formatInt(dataCenterCoverage.research?.officers?.rows) }}</el-descriptions-item><el-descriptions-item label="薪酬持股">{{ formatInt(dataCenterCoverage.research?.officer_rewards?.rows) }}</el-descriptions-item></el-descriptions></el-card></el-col>
               <el-col :span="8"><el-card class="glass-card"><template #header>市场结构</template><el-descriptions :column="1" border><el-descriptions-item label="指数">{{ formatInt(dataCenterCoverage.market_structure?.indexes?.rows) }}</el-descriptions-item><el-descriptions-item label="板块">{{ formatInt(dataCenterCoverage.market_structure?.sectors?.rows) }}</el-descriptions-item><el-descriptions-item label="成分股">{{ formatInt((dataCenterCoverage.market_structure?.index_constituents?.rows || 0) + (dataCenterCoverage.market_structure?.sector_constituents?.rows || 0)) }}</el-descriptions-item></el-descriptions></el-card></el-col>
               <el-col :span="24"><el-card class="glass-card"><template #header>V2 数据刷新</template><el-button type="primary" :loading="syncLoading" @click="runFundamentalRefresh">刷新当前股票研究数据</el-button><el-button :loading="syncLoading" @click="runMarketStructureSync">刷新指数与板块结构</el-button></el-card></el-col>
             </el-row>
@@ -237,9 +241,10 @@ const app = Vue.createApp({
       marketDashboard: { indexes: [], sectors: [], rankings: { gainers: [], losers: [], amount: [] }, breadth: {}, freshness: {}, data_source_status: {} },
       marketDashboardLoadedAt: 0,
       marketDashboardCacheTtlMs: 60000,
-      stockOverview: { stock: {}, latest_bar: null, company_profile: null, share_capital: [], corporate_actions: [], data_quality: {} },
-      stockFinancials: { income: [], balance: [], cashflow: [] },
-      stockCapitalFlow: { rows: [] },
+      stockOverview: { stock: {}, latest_bar: null, company_profile: null, share_capital: [], corporate_actions: [], holders: [], officers: [], officer_rewards: [], data_quality: { enterprise_modules: {} } },
+      stockFinancials: { income: [], balance: [], cashflow: [], summary: {} },
+      stockCapitalFlow: { rows: [], summary: {} },
+      stockEnterpriseActiveTab: "financials",
       dataCenterCoverage: { core: {}, research: {}, market_structure: {}, sync: {} },
       klinePeriod: "day",
       screening: {},
@@ -459,9 +464,9 @@ const app = Vue.createApp({
       this.stockBars = bars || [];
       this.stockIndicators = indicators || [];
       this.stockSignals = signals || [];
-      this.stockOverview = overview || this.stockOverview;
-      this.stockFinancials = financials || { income: [], balance: [], cashflow: [] };
-      this.stockCapitalFlow = capitalFlow || { rows: [] };
+      this.stockOverview = { stock: {}, latest_bar: null, company_profile: null, share_capital: [], corporate_actions: [], holders: [], officers: [], officer_rewards: [], data_quality: { enterprise_modules: {} }, ...(overview || {}) };
+      this.stockFinancials = { income: [], balance: [], cashflow: [], summary: {}, ...(financials || {}) };
+      this.stockCapitalFlow = { rows: [], summary: {}, ...(capitalFlow || {}) };
       await nextTick();
       this.renderKlineChart();
     },
@@ -476,9 +481,30 @@ const app = Vue.createApp({
       this.dataCenterCoverage = await this.api("/api/data-center/coverage");
     },
 
-    async loadStockOverview(rawSymbol) {
+    async loadStockOverview(rawSymbol, refreshMissing = false) {
       const symbol = encodeURIComponent(rawSymbol);
-      return this.api(`/api/stocks/${symbol}/overview`);
+      const query = refreshMissing ? "?refresh_missing=true" : "";
+      return this.api(`/api/stocks/${symbol}/overview${query}`);
+    },
+
+    async handleEnterpriseTabChange(tabName) {
+      if (tabName !== "people") return;
+      const symbol = this.selectedStock.symbol || this.routeParam;
+      if (!symbol) return;
+      const status = this.enterpriseModuleStatus("officers");
+      if (Number(status.rows || 0) > 0) return;
+      this.stockOverview = {
+        stock: {},
+        latest_bar: null,
+        company_profile: null,
+        share_capital: [],
+        corporate_actions: [],
+        holders: [],
+        officers: [],
+        officer_rewards: [],
+        data_quality: { enterprise_modules: {} },
+        ...(await this.loadStockOverview(symbol, true)),
+      };
     },
 
     async loadStockFinancials(rawSymbol) {
@@ -787,6 +813,15 @@ const app = Vue.createApp({
 
     priceModeLabel(value) {
       return { forward_adjusted: "前复权", unadjusted: "不复权" }[value] || value || "-";
+    },
+
+    enterpriseModuleStatus(key) {
+      return (this.stockOverview.data_quality?.enterprise_modules || {})[key] || { rows: 0, status: "missing", newest_date: null, provider: null };
+    },
+
+    enterpriseModuleStatusLabel(key) {
+      const status = this.enterpriseModuleStatus(key).status;
+      return { synced: "已同步", missing: "暂无数据", failed: "同步失败", stale: "需刷新" }[status] || status || "-";
     },
 
     statusLabel(value) {

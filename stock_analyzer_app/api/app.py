@@ -305,7 +305,11 @@ def create_app() -> FastAPI:
                 "financial_statements": {"symbols": 0, "rows": 0},
                 "capital_flow": {"symbols": 0, "rows": 0},
                 "company_profiles": {"symbols": 0, "rows": 0},
+                "corporate_actions": {"symbols": 0, "rows": 0},
+                "share_capital": {"symbols": 0, "rows": 0},
                 "holders": {"symbols": 0, "rows": 0},
+                "officers": {"symbols": 0, "rows": 0},
+                "officer_rewards": {"symbols": 0, "rows": 0},
             },
             "market_structure": {
                 "indexes": {"rows": 0},
@@ -331,9 +335,19 @@ def create_app() -> FastAPI:
         return stock
 
     @app.get("/api/stocks/{symbol}/overview")
-    def stock_overview(symbol: str) -> dict[str, Any]:
+    def stock_overview(symbol: str, refresh_missing: bool = False) -> dict[str, Any]:
         if hasattr(runtime.analysis_repository, "stock_research_snapshot"):
-            return runtime.analysis_repository.stock_research_snapshot(symbol)
+            snapshot = runtime.analysis_repository.stock_research_snapshot(symbol)
+            if refresh_missing and _needs_enterprise_refresh(snapshot):
+                try:
+                    runtime.make_daily_pipeline().run_fundamental_refresh_pipeline(
+                        requested_by=f"overview:auto:{symbol}",
+                        symbols=[symbol],
+                    )
+                    snapshot = runtime.analysis_repository.stock_research_snapshot(symbol)
+                except Exception:  # noqa: BLE001 - overview should still return the existing local snapshot.
+                    pass
+            return snapshot
         stock = next((row for row in runtime.analysis_repository.list_stocks() if row["symbol"] == symbol), None)
         if not stock:
             raise HTTPException(status_code=404, detail="stock not found")
@@ -345,9 +359,21 @@ def create_app() -> FastAPI:
             "company_profile": None,
             "share_capital": [],
             "corporate_actions": [],
+            "holders": [],
+            "officers": [],
+            "officer_rewards": [],
             "data_quality": {
                 "has_bars": bool(bars),
                 "has_research_data": False,
+                "enterprise_modules": {
+                    "company_profile": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                    "share_capital": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                    "corporate_actions": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                    "holders": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                    "officers": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                    "officer_rewards": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                    "capital_flow": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                },
             },
         }
 
@@ -355,13 +381,13 @@ def create_app() -> FastAPI:
     def stock_financials(symbol: str) -> dict[str, Any]:
         if hasattr(runtime.analysis_repository, "stock_financials"):
             return runtime.analysis_repository.stock_financials(symbol)
-        return {"symbol": symbol, "income": [], "balance": [], "cashflow": []}
+        return {"symbol": symbol, "income": [], "balance": [], "cashflow": [], "summary": {"latest_report_date": None, "income_rows": 0, "balance_rows": 0, "cashflow_rows": 0}}
 
     @app.get("/api/stocks/{symbol}/capital-flow")
     def stock_capital_flow(symbol: str) -> dict[str, Any]:
         if hasattr(runtime.analysis_repository, "stock_capital_flow"):
             return runtime.analysis_repository.stock_capital_flow(symbol)
-        return {"symbol": symbol, "rows": []}
+        return {"symbol": symbol, "rows": [], "summary": {"latest_trade_date": None, "rows": 0}}
 
     @app.get("/api/stocks/{symbol}/bars")
     def stock_bars(symbol: str, refresh: bool = False) -> list[dict]:
@@ -534,6 +560,14 @@ def _run_backtest_request(request: BacktestRequest) -> dict[str, Any]:
 
 
 app = create_app()
+
+
+def _needs_enterprise_refresh(snapshot: dict[str, Any]) -> bool:
+    modules = snapshot.get("data_quality", {}).get("enterprise_modules", {})
+    if not modules:
+        return False
+    watched_modules = ["company_profile", "holders", "officers", "officer_rewards"]
+    return not any(int((modules.get(key) or {}).get("rows") or 0) > 0 for key in watched_modules)
 
 
 def _list_sync_jobs() -> list[dict]:

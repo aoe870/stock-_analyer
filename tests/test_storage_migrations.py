@@ -28,6 +28,7 @@ def test_settings_reads_mysql_and_provider_defaults(monkeypatch, tmp_path):
     assert settings.provider_priority == ["tushare", "akshare", "eastmoney"]
     assert settings.sync_enabled is True
     assert settings.sync_max_workers == 8
+    assert settings.miana_base_url == "http://124.222.142.232:9876/api"
     assert settings.miana_max_requests_per_minute == 500
     assert settings.sync_include_optional_metadata is False
 
@@ -69,15 +70,16 @@ def test_load_migration_files_returns_filename_order():
         "004_create_stock_status_schema.sql",
         "005_create_miana_multisource_schema.sql",
         "006_create_miana_v2_research_schema.sql",
+        "007_extend_company_profiles.sql",
     ]
     assert all(len(file.checksum) == 64 for file in files)
 
 
 def test_calculate_sha256_uses_file_bytes(tmp_path):
     migration = tmp_path / "001_example.sql"
-    migration.write_text("SELECT 1;\n", encoding="utf-8")
+    migration.write_bytes(b"SELECT 1;\n")
 
-    assert calculate_sha256(migration) == "d3cd5042f97738960d802ad6b3a548dfa18152215118ba18f04493bc6944b0e4"
+    assert calculate_sha256(migration) == "b4e0497804e46e0a0b0b8c31975b062152d551bac49c3c2e80932567b4085dcd"
 
 
 def test_plan_migrations_refuses_changed_applied_file(tmp_path):

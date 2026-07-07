@@ -47,7 +47,7 @@ class MianaProvider:
         self._thread_local = threading.local()
 
     def fetch_stock_universe(self) -> list[dict]:
-        payload = self._request("/stock/v1/stockList", {"countryCode": "CHN"})
+        payload = self._request("/stock/v1/stockList", {"market": "cn_hsj"})
         rows = _data(payload)
         output = []
         for row in rows:
@@ -121,7 +121,7 @@ class MianaProvider:
     def fetch_stock_rankings(self, sort: str = "changeRate", order: str = "DESC", page: int = 1) -> list[dict]:
         payload = self._request(
             "/stock/v1/sort",
-            {"market": "cn_hs", "sort": sort, "order": order, "page": str(page)},
+            {"market": "cn_hsj", "sort": sort, "order": order, "page": str(page)},
         )
         return [_normalize_quote_row(row) for row in _list_data(payload) if normalized_symbol(row)]
 
@@ -141,45 +141,55 @@ class MianaProvider:
 
     def fetch_company_profiles(self, symbol: str) -> list[dict]:
         payload = self._request("/stock/v1/companyInfo", {"symbol": miana_symbol(symbol)}, symbol=symbol)
-        data = payload.get("data") or {}
-        if not data:
-            return []
-        return [
-            {
+        rows = _company_profile_rows(payload)
+        output = []
+        for row in rows:
+            concepts = row.get("concepts")
+            found_date = _date(row.get("foundDate")) or (_date(concepts) if _looks_like_date(concepts) else None)
+            output.append(
+                {
                 "symbol": symbol,
                 "provider": self.name,
-                "industry": data.get("industry"),
-                "region": data.get("regionBK"),
-                "concepts": data.get("concepts"),
-                "address": data.get("address") or data.get("regAddress"),
-                "legal_person": data.get("legalPerson"),
-                "chairman": data.get("chairman"),
-                "president": data.get("president"),
-                "secretary": data.get("secretary"),
-                "org_tel": data.get("orgTel"),
-                "org_email": data.get("orgEmail"),
-                "org_web": data.get("orgWeb"),
-                "org_profile": data.get("orgProfile"),
-                "main_business": data.get("mainBusiness"),
-                "raw_json": data,
+                "company_name": row.get("orgName") or row.get("nameA") or row.get("name"),
+                "industry": row.get("industry"),
+                "region": row.get("regionBK"),
+                "concepts": None if found_date and _looks_like_date(concepts) else concepts,
+                "address": row.get("address") or row.get("regAddress"),
+                "legal_person": row.get("legalPerson"),
+                "chairman": row.get("chairman"),
+                "president": row.get("president"),
+                "secretary": row.get("secretary"),
+                "found_date": found_date,
+                "registered_capital": row.get("regCapital"),
+                "employee_count": row.get("totalNum") or row.get("tatolNumber"),
+                "accounting_firm": row.get("accountFirm"),
+                "legal_adviser": row.get("legalAdviser"),
+                "org_tel": row.get("orgTel"),
+                "org_email": row.get("orgEmail"),
+                "org_web": row.get("orgWeb"),
+                "org_profile": row.get("orgProfile"),
+                "company_profile": row.get("profile"),
+                "main_business": row.get("mainBusiness"),
+                "raw_json": dict(row),
             }
-        ]
+            )
+        return output
 
     def fetch_corporate_actions(self, symbol: str) -> list[dict]:
-        payload = self._request("/stock/v1/distribute", {"symbol": miana_symbol(symbol)}, symbol=symbol)
+        payload = self._request_first(["/stock/v1/distribution", "/stock/v1/distribute"], {"symbol": miana_symbol(symbol)}, symbol=symbol)
         return [
             {
                 "symbol": symbol,
                 "provider": self.name,
-                "action_type": row.get("type", "unknown"),
+                "action_type": row.get("dividendType") or row.get("type", "unknown"),
                 "currency": row.get("currency"),
-                "dividend": row.get("dividend"),
-                "split_factor": row.get("splitFactor"),
-                "notice_date": _date(row.get("noticeDate")),
-                "report_date": row.get("reportDate") or "",
-                "equity_record_date": _date(row.get("equityRecordDate")),
+                "dividend": _first_value(row, "cashAmount", "cashPerShare", "dividend"),
+                "split_factor": _first_value(row, "stockRatio", "splitFactor"),
+                "notice_date": _date(row.get("announcementDate") or row.get("noticeDate")),
+                "report_date": str(row.get("fiscalYear") or row.get("reportDate") or ""),
+                "equity_record_date": _date(row.get("recordDate") or row.get("equityRecordDate")),
                 "ex_dividend_date": _date(row.get("exDividendDate")),
-                "pay_cash_date": _date(row.get("payCashDate")),
+                "pay_cash_date": _date(row.get("paymentDate") or row.get("payCashDate")),
                 "raw_json": dict(row),
             }
             for row in _data(payload)
@@ -222,22 +232,22 @@ class MianaProvider:
         ]
 
     def fetch_income_statements(self, symbol: str) -> list[dict]:
-        payload = self._request("/stock/v1/incomeSheet", {"symbol": miana_symbol(symbol)}, symbol=symbol)
+        payload = self._request_first(["/stock/v1/incomeStatement", "/stock/v1/incomeSheet"], {"symbol": miana_symbol(symbol)}, symbol=symbol)
         return [
             {
                 "symbol": symbol,
                 "provider": self.name,
                 "report_date": _date(row.get("reportDate") or row.get("date") or row.get("endDate")),
-                "notice_date": _date(row.get("noticeDate")),
-                "report_period": row.get("reportPeriod") or row.get("reportDate") or "",
+                "notice_date": _date(row.get("announcementDate") or row.get("noticeDate")),
+                "report_period": _report_period(row),
                 "currency": row.get("currency"),
-                "revenue": _first_value(row, "revenue", "totalRevenue"),
+                "revenue": _first_value(row, "totalRevenue", "revenue"),
                 "operating_revenue": _first_value(row, "operatingRevenue", "operateRevenue", "businessIncome"),
                 "operating_profit": _first_value(row, "operatingProfit", "operateProfit"),
                 "total_profit": _first_value(row, "totalProfit"),
                 "net_profit": _first_value(row, "netProfit"),
-                "net_profit_parent": _first_value(row, "netProfitParent", "parentNetProfit"),
-                "eps": _first_value(row, "eps", "basicEps"),
+                "net_profit_parent": _first_value(row, "netProfitToParent", "netProfitParent", "parentNetProfit"),
+                "eps": _first_value(row, "basicEps", "eps"),
                 "raw_json": dict(row),
             }
             for row in _data(payload)
@@ -267,19 +277,19 @@ class MianaProvider:
         ]
 
     def fetch_cashflow_statements(self, symbol: str) -> list[dict]:
-        payload = self._request("/stock/v1/cashflow", {"symbol": miana_symbol(symbol)}, symbol=symbol)
+        payload = self._request_first(["/stock/v1/cashFlowStatement", "/stock/v1/cashflow"], {"symbol": miana_symbol(symbol)}, symbol=symbol)
         return [
             {
                 "symbol": symbol,
                 "provider": self.name,
                 "report_date": _date(row.get("reportDate") or row.get("date") or row.get("endDate")),
-                "notice_date": _date(row.get("noticeDate")),
-                "report_period": row.get("reportPeriod") or row.get("reportDate") or "",
+                "notice_date": _date(row.get("announcementDate") or row.get("noticeDate")),
+                "report_period": _report_period(row),
                 "currency": row.get("currency"),
-                "net_operating_cashflow": _first_value(row, "netOperatingCashflow", "netOperateCashflow"),
-                "net_investing_cashflow": _first_value(row, "netInvestingCashflow", "netInvestCashflow"),
-                "net_financing_cashflow": _first_value(row, "netFinancingCashflow", "netFinanceCashflow"),
-                "cash_and_equivalents": _first_value(row, "cashAndEquivalents", "cashEquivalent"),
+                "net_operating_cashflow": _first_value(row, "netCashFromOperating", "netOperatingCashflow", "netOperateCashflow"),
+                "net_investing_cashflow": _first_value(row, "netCashFromInvesting", "netInvestingCashflow", "netInvestCashflow"),
+                "net_financing_cashflow": _first_value(row, "netCashFromFinancing", "netFinancingCashflow", "netFinanceCashflow"),
+                "cash_and_equivalents": _first_value(row, "cashClosingBalance", "cashAndEquivalents", "cashEquivalent"),
                 "raw_json": dict(row),
             }
             for row in _data(payload)
@@ -287,33 +297,34 @@ class MianaProvider:
         ]
 
     def fetch_top10_holders(self, symbol: str) -> list[dict]:
-        payload = self._request("/stock/v1/top10holders", {"symbol": miana_symbol(symbol)}, symbol=symbol)
+        payload = self._request_first(["/stock/v1/top10Shareholders", "/stock/v1/top10holders"], {"symbol": miana_symbol(symbol)}, symbol=symbol)
+        rows = _shareholder_rows(payload)
         return [
             {
                 "symbol": symbol,
                 "provider": self.name,
-                "report_date": _date(row.get("date") or row.get("reportDate") or row.get("endDate")),
-                "holder_name": row.get("name") or row.get("holderName") or "",
-                "holder_rank": row.get("rank"),
-                "hold_volume": _first_value(row, "holdVol", "holdVolume"),
-                "hold_ratio": _first_value(row, "holdRatio", "shareholdingRatio"),
-                "share_type": row.get("shareType"),
+                "report_date": _date(row.get("reportDate") or row.get("date") or row.get("endDate")),
+                "holder_name": row.get("holderName") or row.get("name") or "",
+                "holder_rank": index,
+                "hold_volume": _first_value(row, "holdAmount", "shareCount", "holdVol", "holdVolume"),
+                "hold_ratio": _first_value(row, "holdRatio", "ratio", "shareholdingRatio"),
+                "share_type": row.get("holderType") or row.get("shareType"),
                 "raw_json": dict(row),
             }
-            for row in _data(payload)
-            if _date(row.get("date") or row.get("reportDate") or row.get("endDate")) and (row.get("name") or row.get("holderName"))
+            for index, row in enumerate(rows, start=1)
+            if _date(row.get("reportDate") or row.get("date") or row.get("endDate")) and (row.get("holderName") or row.get("name"))
         ]
 
     def fetch_company_officers(self, symbol: str) -> list[dict]:
-        payload = self._request("/stock/v1/companyOfficer", {"symbol": miana_symbol(symbol)}, symbol=symbol)
+        payload = self._request("/stock/v1/companyOfficers", {"symbol": miana_symbol(symbol)}, symbol=symbol)
         return [
             {
                 "symbol": symbol,
                 "provider": self.name,
                 "officer_name": row.get("name") or "",
                 "title": row.get("title") or "",
-                "start_date": _date(row.get("startDate")),
-                "end_date": _date(row.get("endDate")),
+                "start_date": _date(row.get("appointmentDate") or row.get("startDate")),
+                "end_date": _date(row.get("resignationDate") or row.get("endDate")),
                 "raw_json": dict(row),
             }
             for row in _data(payload)
@@ -329,8 +340,8 @@ class MianaProvider:
                 "report_date": _date(row.get("date") or row.get("reportDate") or row.get("endDate")),
                 "officer_name": row.get("name") or "",
                 "title": row.get("title"),
-                "reward": row.get("reward"),
-                "hold_volume": _first_value(row, "holdVol", "holdVolume"),
+                "reward": _number_value(_first_value(row, "compensation", "reward")),
+                "hold_volume": _number_value(_first_value(row, "shareholding", "sharesHeld", "holdVol", "holdVolume")),
                 "raw_json": dict(row),
             }
             for row in _data(payload)
@@ -421,12 +432,12 @@ class MianaProvider:
                 {
                     "symbol": symbol,
                     "trade_date": _date(row.get("date")),
-                    "open": row.get("open"),
-                    "high": row.get("high"),
-                    "low": row.get("low"),
-                    "close": row.get("price"),
-                    "volume": row.get("volume", 0),
-                    "amount": row.get("amount", 0),
+                    "open": _number_value(row.get("open")),
+                    "high": _number_value(row.get("high")),
+                    "low": _number_value(row.get("low")),
+                    "close": _number_value(_first_value(row, "close", "price")),
+                    "volume": _number_value(row.get("volume", 0)),
+                    "amount": _number_value(row.get("amount", 0)),
                     "source": self.name,
                     "is_adjusted": is_adjusted,
                 }
@@ -465,6 +476,25 @@ class MianaProvider:
         if payload.get("code") not in (None, 0, 200):
             raise RuntimeError(f"Miana {endpoint} returned code={payload.get('code')} msg={payload.get('msg')}")
         return payload
+
+    def _request_first(
+        self,
+        endpoints: list[str],
+        params: dict,
+        symbol: str | None = None,
+        date_start: str | None = None,
+        date_end: str | None = None,
+    ) -> dict:
+        last_error: Exception | None = None
+        for endpoint in endpoints:
+            try:
+                return self._request(endpoint, params, symbol=symbol, date_start=date_start, date_end=date_end)
+            except Exception as exc:  # noqa: BLE001 - fallback endpoint compatibility for provider API drift.
+                last_error = exc
+                continue
+        if last_error:
+            raise last_error
+        raise RuntimeError("Miana endpoint list is empty")
 
     def _append_raw_payload(self, payload: dict) -> None:
         if not hasattr(self._thread_local, "raw_payloads"):
@@ -529,6 +559,25 @@ def _data(payload: dict) -> list[dict]:
     return data if isinstance(data, list) else []
 
 
+def _company_profile_rows(payload: dict) -> list[dict]:
+    data = payload.get("data") or []
+    if isinstance(data, list):
+        return [row for row in data if isinstance(row, dict)]
+    if isinstance(data, dict):
+        return [data]
+    return []
+
+
+def _shareholder_rows(payload: dict) -> list[dict]:
+    data = payload.get("data") or {}
+    if isinstance(data, list):
+        return [row for row in data if isinstance(row, dict)]
+    if not isinstance(data, dict):
+        return []
+    rows = data.get("shareholders") or data.get("holders") or []
+    return [row for row in rows if isinstance(row, dict)]
+
+
 def _list_data(payload: dict) -> list[dict]:
     data = payload.get("data") or []
     if isinstance(data, list):
@@ -544,19 +593,22 @@ def _normalize_quote_row(row: dict) -> dict:
         "symbol": normalized_symbol(row),
         "name": row.get("name") or normalized_symbol(row),
         "exchange": _exchange_from_symbol(normalized_symbol(row)),
-        "trade_date": _date(row.get("date")),
-        "price": _first_value(row, "price", "close"),
-        "close": _first_value(row, "price", "close"),
-        "pre_close": row.get("preClose"),
-        "open": row.get("open"),
-        "high": row.get("high"),
-        "low": row.get("low"),
-        "change": row.get("change"),
+        "trade_date": _date(row.get("localDate") or row.get("date")),
+        "price": _number_value(_first_value(row, "price", "close")),
+        "close": _number_value(_first_value(row, "price", "close")),
+        "pre_close": _number_value(row.get("preClose")),
+        "open": _number_value(row.get("open")),
+        "high": _number_value(row.get("high")),
+        "low": _number_value(row.get("low")),
+        "change": _number_value(row.get("change")),
         "change_rate": _ratio_value(row.get("changeRate")),
-        "volume": row.get("volume"),
-        "amount": row.get("amount"),
-        "turnover": row.get("turnover"),
-        "market_value": row.get("marketValue"),
+        "volume": _number_value(row.get("volume")),
+        "amount": _number_value(row.get("amount")),
+        "turnover": _number_value(row.get("turnover")),
+        "market_value": _first_value(row, "mktCap", "marketValue"),
+        "circulation_value": _first_value(row, "floatCap", "circulationValue"),
+        "total_shares": _first_value(row, "totShr", "totalShares"),
+        "circulation_shares": _first_value(row, "floatShr", "circulationShares"),
         "source": "miana",
         "raw_json": dict(row),
     }
@@ -591,10 +643,46 @@ def _ratio_value(value):
         return value
 
 
+def _number_value(value):
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return value
+    return int(number) if number.is_integer() else number
+
+
+def _report_period(row: dict) -> str:
+    explicit = row.get("reportPeriod")
+    if explicit:
+        return str(explicit)
+    fiscal_year = row.get("fiscalYear")
+    fiscal_period = row.get("fiscalPeriod")
+    if fiscal_year and fiscal_period:
+        return f"{fiscal_year}{fiscal_period}"
+    return str(row.get("reportDate") or "")
+
+
 def _date(value) -> str | None:
     if value in (None, ""):
         return None
     return str(value)[:10]
+
+
+def _looks_like_date(value) -> bool:
+    if value in (None, ""):
+        return False
+    text = str(value)
+    if len(text) < 10:
+        return False
+    try:
+        date.fromisoformat(text[:10])
+        return True
+    except ValueError:
+        return False
 
 
 def _date_segments(start_date: str, end_date: str, max_days: int = 700) -> list[tuple[str, str]]:
