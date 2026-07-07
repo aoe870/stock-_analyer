@@ -566,7 +566,7 @@ def _needs_enterprise_refresh(snapshot: dict[str, Any]) -> bool:
     modules = snapshot.get("data_quality", {}).get("enterprise_modules", {})
     if not modules:
         return False
-    watched_modules = ["company_profile", "holders", "officers", "officer_rewards"]
+    watched_modules = ["holders", "officers", "officer_rewards"]
     return not any(int((modules.get(key) or {}).get("rows") or 0) > 0 for key in watched_modules)
 
 

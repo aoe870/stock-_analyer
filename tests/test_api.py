@@ -484,6 +484,56 @@ def test_stock_overview_refresh_missing_triggers_enterprise_research_once(monkey
     assert response.json()["officers"] == [{"officer_name": "Officer A", "title": "董事长"}]
 
 
+def test_stock_overview_refresh_missing_triggers_when_profile_exists_but_people_missing(monkeypatch):
+    captured = {}
+
+    class Repository:
+        synced = False
+
+        def stock_research_snapshot(self, symbol):
+            return {
+                "stock": {"symbol": symbol},
+                "latest_bar": None,
+                "company_profile": {"company_name": "Test Corp"},
+                "share_capital": [],
+                "corporate_actions": [],
+                "holders": [],
+                "officers": [{"officer_name": "Officer A", "title": "董事长"}] if self.synced else [],
+                "officer_rewards": [],
+                "data_quality": {
+                    "has_bars": False,
+                    "has_research_data": True,
+                    "enterprise_modules": {
+                        "company_profile": {"rows": 1, "status": "synced", "newest_date": None, "provider": "miana"},
+                        "share_capital": {"rows": 31, "status": "synced", "newest_date": "2025-11-06", "provider": "miana"},
+                        "corporate_actions": {"rows": 25, "status": "synced", "newest_date": "2025-10-11", "provider": "miana"},
+                        "holders": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                        "officers": {"rows": 1 if self.synced else 0, "status": "synced" if self.synced else "missing", "newest_date": None, "provider": "miana" if self.synced else None},
+                        "officer_rewards": {"rows": 0, "status": "missing", "newest_date": None, "provider": None},
+                        "capital_flow": {"rows": 1, "status": "synced", "newest_date": "2026-07-03", "provider": "miana"},
+                    },
+                },
+            }
+
+    repository = Repository()
+
+    class Pipeline:
+        def run_fundamental_refresh_pipeline(self, requested_by, symbols=None):
+            captured["requested_by"] = requested_by
+            captured["symbols"] = symbols
+            repository.synced = True
+            return {"id": 89, "status": "completed", "summary": {"success": 1, "metadata_errors": 0}}
+
+    runtime.analysis_repository = repository
+    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: Pipeline())
+
+    response = client.get("/api/stocks/AAA.SZ/overview?refresh_missing=true")
+
+    assert response.status_code == 200
+    assert captured == {"requested_by": "overview:auto:AAA.SZ", "symbols": ["AAA.SZ"]}
+    assert response.json()["officers"] == [{"officer_name": "Officer A", "title": "董事长"}]
+
+
 def test_data_center_coverage_endpoint_returns_v2_sections():
     response = client.get("/api/data-center/coverage")
 

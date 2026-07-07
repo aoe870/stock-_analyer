@@ -158,8 +158,10 @@ def test_frontend_lazy_loads_enterprise_people_tab_with_refresh_missing_flag():
     js = read_public("app.js")
 
     assert '@tab-change="handleEnterpriseTabChange"' in js
+    assert '@tab-click="handleEnterpriseTabChange"' in js
     assert "async handleEnterpriseTabChange(tabName)" in js
-    assert 'if (tabName !== "people") return;' in js
+    assert 'const selectedTab = typeof tabName === "string" ? tabName : tabName?.paneName || tabName?.props?.name || tabName?.name;' in js
+    assert 'if (selectedTab !== "people") return;' in js
     assert 'this.loadStockOverview(symbol, true)' in js
     assert 'const query = refreshMissing ? "?refresh_missing=true" : "";' in js
 
