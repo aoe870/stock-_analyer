@@ -514,6 +514,10 @@ def test_fundamental_refresh_pipeline_persists_research_data_without_daily_bars(
     assert repository.balance[0]["total_assets"] == 1000
     assert repository.cashflow[0]["net_operating_cashflow"] == 50
     assert repository.holders[0]["holder_name"] == "Holder A"
+    freshness = repository.get_dataset_freshness("stock_research_context", "AAA.SZ")
+    assert freshness["status"] == "ready"
+    assert freshness["rows"] == 6
+    assert freshness["owner_job_type"] == "fundamental_refresh_pipeline"
 
 
 def test_market_structure_pipeline_persists_indexes_sectors_and_constituents():

@@ -95,8 +95,8 @@ if ($LASTEXITCODE -ne 0) { throw "docker compose up -d mysql failed" }
 Wait-ForMysql
 Invoke-Migrate
 Invoke-Seed
-docker compose up -d app
-if ($LASTEXITCODE -ne 0) { throw "docker compose up -d app failed" }
+docker compose up -d api collector
+if ($LASTEXITCODE -ne 0) { throw "docker compose up -d api collector failed" }
 Wait-ForHealth
 
 Write-Host "Deployment complete."

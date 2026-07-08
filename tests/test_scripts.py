@@ -40,7 +40,8 @@ def test_docker_compose_declares_mysql_8_service():
     content = Path("docker-compose.yml").read_text(encoding="utf-8")
 
     assert "mysql:" in content
-    assert "app:" in content
+    assert "api:" in content
+    assert "collector:" in content
     assert "build:" in content
     assert "mysql:8" in content
     assert "stock_analyzer" in content
@@ -60,9 +61,9 @@ def test_linux_and_windows_docker_deploy_entrypoints_exist():
     linux_content = linux.read_text(encoding="utf-8")
     windows_content = windows.read_text(encoding="utf-8")
 
-    for expected in ["docker compose", "up -d mysql", "migrate", "seed", "up -d app", "/api/health"]:
+    for expected in ["docker compose", "up -d mysql", "migrate", "seed", "up -d api collector", "/api/health"]:
         assert expected in linux_content
-    for expected in ["docker compose", "up -d mysql", "migrate", "seed", "up -d app", "/api/health"]:
+    for expected in ["docker compose", "up -d mysql", "migrate", "seed", "up -d api collector", "/api/health"]:
         assert expected in windows_content
 
 

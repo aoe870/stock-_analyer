@@ -200,6 +200,127 @@ def test_mysql_repository_persists_sync_jobs_and_items():
     assert repo.get_job_items(job["id"])[0]["symbol"] == "TST001.SZ"
 
 
+def test_mysql_repository_persists_sync_requests_and_dataset_freshness():
+    repo = repository()
+
+    request = repo.create_sync_request(
+        "full_daily_pipeline",
+        dataset="market_dashboard",
+        scope={"start_date": "2026-07-05", "end_date": "2026-07-05"},
+        priority=70,
+        requested_by="api",
+        reason="dashboard:auto",
+    )
+    claimed = repo.claim_sync_request(request["id"])
+    finished = repo.finish_sync_request(request["id"], "completed")
+    freshness = repo.upsert_dataset_freshness(
+        "market_dashboard",
+        status="ready",
+        latest_data_date="2026-07-03",
+        rows=120,
+        owner_job_type="full_daily_pipeline",
+        summary={"success": 120},
+    )
+
+    assert repo.get_sync_request(request["id"])["scope"]["start_date"] == "2026-07-05"
+    assert any(item["id"] == request["id"] for item in repo.list_sync_requests())
+    assert claimed["status"] == "claimed"
+    assert finished["status"] == "completed"
+    assert freshness["status"] == "ready"
+    assert freshness["rows"] == 120
+    assert repo.get_dataset_freshness("market_dashboard")["summary"]["success"] == 120
+
+
+def test_mysql_repository_lists_symbols_missing_enterprise_data():
+    repo = repository()
+    provider = "unit_enterprise_missing"
+    repo.upsert_stocks(
+        [
+            {"symbol": "TST001.SZ", "exchange": "SZ", "name": "Complete", "source": provider},
+            {"symbol": "TST002.SZ", "exchange": "SZ", "name": "Missing People", "source": provider},
+        ]
+    )
+    repo.upsert_stock_company_profiles(
+        [
+            {"symbol": "TST001.SZ", "provider": provider, "company_name": "Complete", "raw_json": {}},
+            {"symbol": "TST002.SZ", "provider": provider, "company_name": "Missing People", "raw_json": {}},
+        ]
+    )
+    repo.upsert_stock_top10_holders(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": provider,
+                "report_date": "2024-12-31",
+                "holder_name": "Holder A",
+                "holder_rank": 1,
+                "raw_json": {},
+            }
+        ]
+    )
+    repo.upsert_stock_company_officers(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": provider,
+                "officer_name": "Officer A",
+                "title": "CEO",
+                "raw_json": {},
+            }
+        ]
+    )
+    repo.upsert_stock_officer_rewards(
+        [
+            {
+                "symbol": "TST001.SZ",
+                "provider": provider,
+                "report_date": "2024-12-31",
+                "officer_name": "Officer A",
+                "raw_json": {},
+            }
+        ]
+    )
+
+    excluded = [stock["symbol"] for stock in repo.list_stocks() if stock["symbol"] not in {"TST001.SZ", "TST002.SZ"}]
+    assert repo.list_symbols_missing_enterprise_data(limit=10, excluded_symbols=excluded) == ["TST002.SZ"]
+    repo.upsert_dataset_freshness(
+        "stock_research_context",
+        scope_key="TST002.SZ",
+        status="empty",
+        rows=0,
+        owner_job_type="fundamental_refresh_pipeline",
+        summary={"success": 1, "rows": 0},
+    )
+    assert repo.list_symbols_missing_enterprise_data(limit=10, excluded_symbols=excluded) == []
+    repo._execute(
+        "UPDATE dataset_freshness SET last_attempt_at=NOW() - INTERVAL 1 DAY WHERE dataset=%s AND scope_key=%s",
+        ("stock_research_context", "TST002.SZ"),
+    )
+    assert repo.list_symbols_missing_enterprise_data(limit=10, excluded_symbols=excluded) == []
+    repo._execute(
+        "UPDATE dataset_freshness SET last_attempt_at=NOW() - INTERVAL 8 DAY WHERE dataset=%s AND scope_key=%s",
+        ("stock_research_context", "TST002.SZ"),
+    )
+    assert repo.list_symbols_missing_enterprise_data(limit=10, excluded_symbols=excluded) == ["TST002.SZ"]
+    assert repo.list_symbols_missing_enterprise_data(limit=10, excluded_symbols=[*excluded, "TST002.SZ"]) == []
+
+
+def test_mysql_clear_test_data_removes_symbol_scoped_sync_requests():
+    repo = repository()
+    request = repo.create_sync_request(
+        "fundamental_refresh_pipeline",
+        dataset="stock_research_context",
+        scope={"symbols": ["TST001.SZ"]},
+        requested_by="api",
+        reason="overview:on-demand:TST001.SZ",
+    )
+
+    repo.clear_test_data(["TST001.SZ"])
+
+    with pytest.raises(KeyError):
+        repo.get_sync_request(request["id"])
+
+
 def test_mysql_repository_upserts_trading_calendar_and_stock_status():
     repo = repository()
     repo.upsert_stocks(

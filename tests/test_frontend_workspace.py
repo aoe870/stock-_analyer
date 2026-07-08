@@ -166,6 +166,13 @@ def test_frontend_lazy_loads_enterprise_people_tab_with_refresh_missing_flag():
     assert 'const query = refreshMissing ? "?refresh_missing=true" : "";' in js
 
 
+def test_frontend_stock_detail_does_not_refresh_bars_on_default_open():
+    js = read_public("app.js")
+
+    assert "/bars?refresh=true" not in js
+    assert "/bars`" in js
+
+
 def test_frontend_reuses_recent_market_dashboard_payload_between_route_switches():
     js = read_public("app.js")
 

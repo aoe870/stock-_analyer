@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 import importlib
 
 from stock_analyzer_app.api.app import create_app, runtime
+from stock_analyzer_app.collector import CollectorService
 from stock_analyzer_app.config import AppSettings
 from stock_analyzer_app.data_provider.demo_provider import DemoAshareProvider
 from stock_analyzer_app.storage.mysql import MySqlRepository, mysql_available
@@ -19,7 +20,6 @@ pytestmark = pytest.mark.skipif(
 def test_api_full_daily_pipeline_uses_persisted_sync_path(monkeypatch):
     runtime.configure_repositories()
     monkeypatch.setattr(runtime, "build_sync_providers", lambda: [DemoAshareProvider()])
-    monkeypatch.setattr(api_module, "_active_sync_job", lambda job_type: None)
     assert isinstance(runtime.analysis_repository, MySqlRepository)
     runtime.analysis_repository.clear_test_data(["DEMO001.SZ"])
     client = TestClient(create_app())
@@ -29,10 +29,14 @@ def test_api_full_daily_pipeline_uses_persisted_sync_path(monkeypatch):
         json={"job_type": "full_daily_pipeline", "start_date": "2024-06-01", "end_date": "2024-08-31"},
     )
 
-    assert response.status_code == 200
-    job = response.json()
-    assert job["status"] == "completed"
-    assert job["summary"]["success"] >= 1
+    assert response.status_code == 202
+    request = response.json()
+    assert request["status"] == "pending"
+
+    processed = CollectorService(runtime.sync_repository, runtime.make_daily_pipeline).process_pending_requests(limit=1)
+
+    assert processed == 1
+    assert runtime.sync_repository.get_sync_request(request["id"])["status"] == "completed"
     rows = runtime.analysis_repository.latest_screening_rows("2024-12-31", symbols=["DEMO001.SZ"])
     assert rows
     assert rows[0]["symbol"] == "DEMO001.SZ"
@@ -47,12 +51,13 @@ def test_api_full_daily_pipeline_uses_persisted_sync_path(monkeypatch):
 def test_api_persists_screening_and_backtest_run_history_to_mysql(monkeypatch):
     runtime.configure_repositories()
     monkeypatch.setattr(runtime, "build_sync_providers", lambda: [DemoAshareProvider()])
-    monkeypatch.setattr(api_module, "_active_sync_job", lambda job_type: None)
     client = TestClient(create_app())
-    client.post(
+    response = client.post(
         "/api/sync/jobs",
         json={"job_type": "full_daily_pipeline", "start_date": "2024-06-01", "end_date": "2024-12-31"},
     )
+    assert response.status_code == 202
+    CollectorService(runtime.sync_repository, runtime.make_daily_pipeline).process_pending_requests(limit=1)
 
     screening = client.post(
         "/api/screenings",
@@ -111,7 +116,6 @@ def test_api_full_daily_pipeline_uses_runtime_provider_chain(monkeypatch):
             return []
 
     monkeypatch.setattr(runtime, "build_sync_providers", lambda: [ChainProvider()])
-    monkeypatch.setattr(api_module, "_active_sync_job", lambda job_type: None)
     client = TestClient(create_app())
 
     response = client.post(
@@ -119,8 +123,10 @@ def test_api_full_daily_pipeline_uses_runtime_provider_chain(monkeypatch):
         json={"job_type": "full_daily_pipeline", "symbols": ["CHAIN001.SZ"], "start_date": "2024-01-01", "end_date": "2024-01-31"},
     )
 
-    assert response.status_code == 200
-    assert response.json()["summary"]["success"] == 1
+    assert response.status_code == 202
+    request = response.json()
+    assert request["scope"]["symbols"] == ["CHAIN001.SZ"]
+    CollectorService(runtime.sync_repository, runtime.make_daily_pipeline).process_pending_requests(limit=1)
     rows = runtime.analysis_repository.latest_screening_rows("2024-01-31", symbols=["CHAIN001.SZ"])
     assert rows[0]["source"] == "chain"
 

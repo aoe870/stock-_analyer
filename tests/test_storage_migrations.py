@@ -18,6 +18,7 @@ def test_settings_reads_mysql_and_provider_defaults(monkeypatch, tmp_path):
     monkeypatch.delenv("STOCK_ANALYZER_MIANA_TOKEN", raising=False)
     monkeypatch.delenv("STOCK_ANALYZER_SYNC_MAX_WORKERS", raising=False)
     monkeypatch.delenv("STOCK_ANALYZER_MIANA_MAX_REQUESTS_PER_MINUTE", raising=False)
+    monkeypatch.delenv("STOCK_ANALYZER_SYNC_ENABLED", raising=False)
     monkeypatch.setenv("STOCK_ANALYZER_DB_HOST", "db.local")
     monkeypatch.setenv("STOCK_ANALYZER_DB_PASSWORD", "secret")
 
@@ -31,6 +32,7 @@ def test_settings_reads_mysql_and_provider_defaults(monkeypatch, tmp_path):
     assert settings.miana_base_url == "http://124.222.142.232:9876/api"
     assert settings.miana_max_requests_per_minute == 500
     assert settings.sync_include_optional_metadata is False
+    assert settings.enterprise_refresh_ttl_days == 7
 
 
 def test_settings_loads_local_dotenv_for_miana_config(monkeypatch, tmp_path):
@@ -71,6 +73,7 @@ def test_load_migration_files_returns_filename_order():
         "005_create_miana_multisource_schema.sql",
         "006_create_miana_v2_research_schema.sql",
         "007_extend_company_profiles.sql",
+        "008_create_collector_split_schema.sql",
     ]
     assert all(len(file.checksum) == 64 for file in files)
 

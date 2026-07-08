@@ -90,7 +90,7 @@ $COMPOSE up -d mysql
 wait_for_mysql
 migrate
 seed
-$COMPOSE up -d app
+$COMPOSE up -d api collector
 wait_for_health
 
 echo "Deployment complete."

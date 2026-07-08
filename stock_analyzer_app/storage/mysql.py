@@ -56,8 +56,13 @@ class MySqlRepository:
         if not symbols:
             return
         placeholders = ",".join(["%s"] * len(symbols))
+        request_conditions = " OR ".join(["scope_json LIKE %s OR reason LIKE %s"] * len(symbols))
+        request_params = []
+        for symbol in symbols:
+            request_params.extend([f"%{symbol}%", f"%{symbol}%"])
         with self.connection() as connection:
             with connection.cursor() as cursor:
+                cursor.execute(f"DELETE FROM sync_requests WHERE {request_conditions}", request_params)
                 cursor.execute(f"DELETE FROM strategy_signals WHERE symbol IN ({placeholders})", symbols)
                 cursor.execute(f"DELETE FROM daily_indicators WHERE symbol IN ({placeholders})", symbols)
                 cursor.execute(f"DELETE FROM analysis_daily_bars WHERE symbol IN ({placeholders})", symbols)
@@ -79,6 +84,7 @@ class MySqlRepository:
                 cursor.execute(f"DELETE FROM adjustment_factors WHERE symbol IN ({placeholders})", symbols)
                 cursor.execute(f"DELETE FROM daily_bars WHERE symbol IN ({placeholders})", symbols)
                 cursor.execute(f"DELETE FROM raw_provider_payloads WHERE symbol IN ({placeholders})", symbols)
+                cursor.execute(f"DELETE FROM dataset_freshness WHERE scope_key IN ({placeholders})", symbols)
                 cursor.execute(f"DELETE FROM stocks WHERE symbol IN ({placeholders})", symbols)
                 cursor.execute(f"DELETE FROM sync_job_items WHERE symbol IN ({placeholders})", symbols)
 
@@ -1284,6 +1290,191 @@ class MySqlRepository:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT COUNT(*) AS count FROM sync_jobs WHERE job_type=%s AND status IN ('pending','running')", (job_type,))
                 return cursor.fetchone()["count"] > 0
+
+    def create_sync_request(
+        self,
+        request_type: str,
+        dataset: str | None = None,
+        scope: dict | None = None,
+        priority: int = 50,
+        requested_by: str = "api",
+        reason: str | None = None,
+    ) -> dict:
+        sql = """
+            INSERT INTO sync_requests (request_type, dataset, scope_json, priority, status, requested_by, reason)
+            VALUES (%s, %s, %s, %s, 'pending', %s, %s)
+        """
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    sql,
+                    (
+                        request_type,
+                        dataset or request_type,
+                        json.dumps(scope or {}),
+                        int(priority),
+                        requested_by,
+                        reason,
+                    ),
+                )
+                request_id = cursor.lastrowid
+        return self.get_sync_request(request_id)
+
+    def get_sync_request(self, request_id: int) -> dict:
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT * FROM sync_requests WHERE id=%s", (request_id,))
+                row = cursor.fetchone()
+        if not row:
+            raise KeyError(request_id)
+        row["scope"] = json.loads(row.pop("scope_json") or "{}")
+        return row
+
+    def list_sync_requests(self, limit: int = 100) -> list[dict]:
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT * FROM sync_requests
+                    ORDER BY FIELD(status, 'pending', 'claimed', 'failed', 'completed', 'cancelled'), priority DESC, id DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                rows = cursor.fetchall()
+        requests = []
+        for row in rows:
+            row["scope"] = json.loads(row.pop("scope_json") or "{}")
+            requests.append(row)
+        return requests
+
+    def claim_sync_request(self, request_id: int) -> dict:
+        self._execute(
+            "UPDATE sync_requests SET status='claimed', claimed_at=NOW() WHERE id=%s AND status='pending'",
+            (request_id,),
+        )
+        return self.get_sync_request(request_id)
+
+    def finish_sync_request(self, request_id: int, status: str, error_message: str | None = None) -> dict:
+        self._execute(
+            "UPDATE sync_requests SET status=%s, error_message=%s, finished_at=NOW() WHERE id=%s",
+            (status, error_message, request_id),
+        )
+        return self.get_sync_request(request_id)
+
+    def recover_claimed_sync_requests(self) -> int:
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE sync_requests SET status='pending', claimed_at=NULL WHERE status='claimed'")
+                return int(cursor.rowcount)
+
+    def upsert_dataset_freshness(
+        self,
+        dataset: str,
+        scope_key: str = "global",
+        status: str = "missing",
+        latest_data_date: str | None = None,
+        rows: int = 0,
+        missing_count: int = 0,
+        failed_count: int = 0,
+        owner_job_type: str | None = None,
+        summary: dict | None = None,
+    ) -> dict:
+        sql = """
+            INSERT INTO dataset_freshness
+                (dataset, scope_key, latest_data_date, last_success_at, last_attempt_at, status,
+                 rows_count, missing_count, failed_count, owner_job_type, summary_json)
+            VALUES (%s, %s, %s, IF(%s='ready', NOW(), NULL), NOW(), %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                latest_data_date=VALUES(latest_data_date),
+                last_success_at=IF(VALUES(status)='ready', NOW(), last_success_at),
+                last_attempt_at=NOW(),
+                status=VALUES(status),
+                rows_count=VALUES(rows_count),
+                missing_count=VALUES(missing_count),
+                failed_count=VALUES(failed_count),
+                owner_job_type=VALUES(owner_job_type),
+                summary_json=VALUES(summary_json)
+        """
+        self._execute(
+            sql,
+            (
+                dataset,
+                scope_key,
+                latest_data_date,
+                status,
+                status,
+                int(rows),
+                int(missing_count),
+                int(failed_count),
+                owner_job_type,
+                json.dumps(summary or {}),
+            ),
+        )
+        return self.get_dataset_freshness(dataset, scope_key)
+
+    def get_dataset_freshness(self, dataset: str, scope_key: str = "global") -> dict | None:
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM dataset_freshness WHERE dataset=%s AND scope_key=%s",
+                    (dataset, scope_key),
+                )
+                row = cursor.fetchone()
+        if not row:
+            return None
+        row["rows"] = row.pop("rows_count")
+        row["summary"] = json.loads(row.pop("summary_json") or "{}")
+        return row
+
+    def list_symbols_missing_enterprise_data(self, limit: int = 100, excluded_symbols: set[str] | list[str] | None = None) -> list[str]:
+        excluded = sorted({str(symbol) for symbol in (excluded_symbols or []) if symbol})
+        ttl_days = max(0, int(getattr(self.settings, "enterprise_refresh_ttl_days", 7)))
+        excluded_sql = ""
+        params: list[Any] = []
+        if excluded:
+            excluded_sql = f"AND s.symbol NOT IN ({','.join(['%s'] * len(excluded))})"
+            params.extend(excluded)
+        params.append(max(0, int(limit)))
+        sql = f"""
+            SELECT s.symbol
+            FROM stocks s
+            LEFT JOIN (
+                SELECT symbol, COUNT(*) AS rows_count FROM stock_company_profiles GROUP BY symbol
+            ) company_profiles ON company_profiles.symbol = s.symbol
+            LEFT JOIN (
+                SELECT symbol, COUNT(*) AS rows_count FROM stock_top10_holders GROUP BY symbol
+            ) holders ON holders.symbol = s.symbol
+            LEFT JOIN (
+                SELECT symbol, COUNT(*) AS rows_count FROM stock_company_officers GROUP BY symbol
+            ) officers ON officers.symbol = s.symbol
+            LEFT JOIN (
+                SELECT symbol, COUNT(*) AS rows_count FROM stock_officer_rewards GROUP BY symbol
+            ) officer_rewards ON officer_rewards.symbol = s.symbol
+            LEFT JOIN dataset_freshness research_attempt
+                ON research_attempt.dataset = 'stock_research_context'
+                AND research_attempt.scope_key = s.symbol
+                AND research_attempt.last_attempt_at >= NOW() - INTERVAL {ttl_days} DAY
+            WHERE COALESCE(s.is_active, 1) = 1
+              {excluded_sql}
+              AND research_attempt.scope_key IS NULL
+              AND (
+                COALESCE(company_profiles.rows_count, 0) = 0
+                OR COALESCE(holders.rows_count, 0) = 0
+                OR COALESCE(officers.rows_count, 0) = 0
+                OR COALESCE(officer_rewards.rows_count, 0) = 0
+              )
+            ORDER BY
+                COALESCE(officers.rows_count, 0) ASC,
+                COALESCE(holders.rows_count, 0) ASC,
+                COALESCE(officer_rewards.rows_count, 0) ASC,
+                s.symbol ASC
+            LIMIT %s
+        """
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(sql, tuple(params))
+                return [row["symbol"] for row in cursor.fetchall()]
 
     def create_screening_run(self, strategy_key: str, trade_date: str, universe: list[str], filters: dict) -> dict:
         sql = """

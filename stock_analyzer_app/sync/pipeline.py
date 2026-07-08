@@ -67,14 +67,16 @@ class DailySyncPipeline:
         provider_names = [provider.name for provider in self.providers]
         job = self.repository.create_job("fundamental_refresh_pipeline", requested_by, provider_names)
         self.repository.mark_job_running(job["id"])
-        summary = {"success": 0, "failed": 0, "metadata_errors": 0}
+        summary = {"success": 0, "failed": 0, "metadata_errors": 0, "rows": 0}
         try:
             if not symbols:
                 symbols = [row["symbol"] for row in self._fetch_stock_universe()]
             for symbol in symbols:
                 try:
-                    errors = self._persist_fundamental_rows(symbol)
+                    errors, rows = self._persist_fundamental_rows(symbol)
                     summary["metadata_errors"] += errors
+                    summary["rows"] += rows
+                    self._mark_fundamental_freshness(symbol, errors, rows)
                     status = "success" if errors == 0 else "completed_with_errors"
                     self.repository.add_item(job["id"], {"symbol": symbol, "status": status, "attempt_count": 1})
                     summary["success"] += 1
@@ -248,8 +250,9 @@ class DailySyncPipeline:
                 error_count += 1
         return error_count
 
-    def _persist_fundamental_rows(self, symbol: str) -> int:
+    def _persist_fundamental_rows(self, symbol: str) -> tuple[int, int]:
         error_count = 0
+        row_count = 0
         calls = [
             ("fetch_company_profiles", "upsert_stock_company_profiles"),
             ("fetch_corporate_actions", "upsert_corporate_actions"),
@@ -268,10 +271,30 @@ class DailySyncPipeline:
                 rows, _, _ = self._fetch_first(fetch_name, symbol)
                 if rows:
                     getattr(self.repository, persist_name)(rows)
+                    row_count += len(rows)
             except Exception:  # noqa: BLE001 - one research endpoint should not block the whole stock.
                 error_count += 1
         self._persist_raw_payloads()
-        return error_count
+        return error_count, row_count
+
+    def _mark_fundamental_freshness(self, symbol: str, errors: int, rows: int) -> None:
+        if not hasattr(self.repository, "upsert_dataset_freshness"):
+            return
+        if errors:
+            status = "partial"
+        elif rows:
+            status = "ready"
+        else:
+            status = "empty"
+        self.repository.upsert_dataset_freshness(
+            "stock_research_context",
+            scope_key=symbol,
+            status=status,
+            rows=rows,
+            failed_count=errors,
+            owner_job_type="fundamental_refresh_pipeline",
+            summary={"metadata_errors": errors, "rows": rows},
+        )
 
     def _persist_raw_payloads(self) -> None:
         if not hasattr(self.repository, "save_raw_provider_payload"):

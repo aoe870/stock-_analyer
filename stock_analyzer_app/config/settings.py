@@ -30,6 +30,7 @@ class AppSettings:
     sync_retry_max_workers: int = 4
     sync_retry_rounds: int = 3
     sync_include_optional_metadata: bool = False
+    enterprise_refresh_ttl_days: int = 7
 
     @classmethod
     def from_env(cls) -> "AppSettings":
@@ -56,6 +57,7 @@ class AppSettings:
             sync_retry_max_workers=int(os.getenv("STOCK_ANALYZER_SYNC_RETRY_MAX_WORKERS", "4")),
             sync_retry_rounds=int(os.getenv("STOCK_ANALYZER_SYNC_RETRY_ROUNDS", "3")),
             sync_include_optional_metadata=os.getenv("STOCK_ANALYZER_SYNC_INCLUDE_OPTIONAL_METADATA", "false").lower() in {"1", "true", "yes"},
+            enterprise_refresh_ttl_days=int(os.getenv("STOCK_ANALYZER_ENTERPRISE_REFRESH_TTL_DAYS", "7")),
             sync_enabled=os.getenv("STOCK_ANALYZER_SYNC_ENABLED", "true").lower() not in {"0", "false", "no"},
             sync_time=os.getenv("STOCK_ANALYZER_SYNC_TIME", "00:00"),
             timezone=os.getenv("STOCK_ANALYZER_TIMEZONE", "Asia/Shanghai"),

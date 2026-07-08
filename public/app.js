@@ -453,7 +453,7 @@ const app = Vue.createApp({
       if (!symbol) return;
       const [stock, bars, indicators, signals, overview, financials, capitalFlow] = await Promise.all([
         this.api(`/api/stocks/${encodeURIComponent(symbol)}`),
-        this.api(`/api/stocks/${encodeURIComponent(symbol)}/bars?refresh=true`),
+        this.api(`/api/stocks/${encodeURIComponent(symbol)}/bars`),
         this.api(`/api/stocks/${encodeURIComponent(symbol)}/indicators`),
         this.api(`/api/stocks/${encodeURIComponent(symbol)}/signals`),
         this.loadStockOverview(symbol),

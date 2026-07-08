@@ -17,19 +17,53 @@ services:
       timeout: 5s
       retries: 10
 
-  app:
+  api:
     build:
       context: .
       dockerfile: Dockerfile
       args:
         PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
         PIP_DEFAULT_TIMEOUT: "${PIP_DEFAULT_TIMEOUT:-120}"
-    container_name: stock_analyzer_app
+    container_name: stock_analyzer_api
     depends_on:
       mysql:
         condition: service_healthy
     ports:
       - "8000:8000"
+    command: python -m stock_analyzer_app api
+    volumes:
+      - ./stock_analyzer_app:/app/stock_analyzer_app
+      - ./public:/app/public
+      - ./db:/app/db
+    environment:
+      STOCK_ANALYZER_DB_HOST: mysql
+      STOCK_ANALYZER_DB_PORT: "3306"
+      STOCK_ANALYZER_DB_NAME: "${STOCK_ANALYZER_DB_NAME:-stock_analyzer}"
+      STOCK_ANALYZER_DB_USER: "${STOCK_ANALYZER_DB_USER:-stock_analyzer}"
+      STOCK_ANALYZER_DB_PASSWORD: "${STOCK_ANALYZER_DB_PASSWORD:-change-me}"
+      STOCK_ANALYZER_SYNC_ENABLED: "false"
+      STOCK_ANALYZER_TIMEZONE: "${STOCK_ANALYZER_TIMEZONE:-Asia/Shanghai}"
+      STOCK_ANALYZER_LOG_LEVEL: "${STOCK_ANALYZER_LOG_LEVEL:-INFO}"
+      STOCK_ANALYZER_HOST: "0.0.0.0"
+      STOCK_ANALYZER_PORT: "8000"
+    restart: unless-stopped
+
+  collector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+        PIP_DEFAULT_TIMEOUT: "${PIP_DEFAULT_TIMEOUT:-120}"
+    container_name: stock_analyzer_collector
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command: python -m stock_analyzer_app collector
+    volumes:
+      - ./stock_analyzer_app:/app/stock_analyzer_app
+      - ./public:/app/public
+      - ./db:/app/db
     environment:
       STOCK_ANALYZER_DB_HOST: mysql
       STOCK_ANALYZER_DB_PORT: "3306"
@@ -48,9 +82,9 @@ services:
       STOCK_ANALYZER_SYNC_RETRY_MAX_WORKERS: "${STOCK_ANALYZER_SYNC_RETRY_MAX_WORKERS:-4}"
       STOCK_ANALYZER_SYNC_RETRY_ROUNDS: "${STOCK_ANALYZER_SYNC_RETRY_ROUNDS:-3}"
       STOCK_ANALYZER_SYNC_INCLUDE_OPTIONAL_METADATA: "${STOCK_ANALYZER_SYNC_INCLUDE_OPTIONAL_METADATA:-false}"
+      STOCK_ANALYZER_FUNDAMENTAL_BATCH_SIZE: "${STOCK_ANALYZER_FUNDAMENTAL_BATCH_SIZE:-5}"
+      STOCK_ANALYZER_ENTERPRISE_REFRESH_TTL_DAYS: "${STOCK_ANALYZER_ENTERPRISE_REFRESH_TTL_DAYS:-7}"
       STOCK_ANALYZER_LOG_LEVEL: "${STOCK_ANALYZER_LOG_LEVEL:-INFO}"
-      STOCK_ANALYZER_HOST: "0.0.0.0"
-      STOCK_ANALYZER_PORT: "8000"
     restart: unless-stopped
 
 volumes:

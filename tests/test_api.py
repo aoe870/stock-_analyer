@@ -42,22 +42,25 @@ def test_sample_endpoint_returns_symbols_and_bars():
 
 
 def test_sync_job_endpoints_create_and_report_status():
+    monkeypatch_message = "sync API should enqueue requests, not run pipelines"
     response = client.post(
         "/api/sync/jobs",
         json={"job_type": "sync_daily_bars", "symbols": ["SAMPLE1"], "start_date": "2024-01-01", "end_date": "2024-01-02"},
     )
 
-    assert response.status_code == 200
-    job = response.json()
-    assert job["task_id"] == str(job["id"])
-    assert job["job_type"] == "sync_daily_bars"
+    assert response.status_code == 202
+    request = response.json()
+    assert request["request_id"] == request["id"]
+    assert request["request_type"] == "sync_daily_bars"
+    assert request["dataset"] == "sync_daily_bars"
+    assert request["status"] == "pending"
 
-    status = client.get(f"/api/sync/jobs/{job['id']}").json()
-    items = client.get(f"/api/sync/jobs/{job['id']}/items").json()
+    status = client.get(f"/api/sync/requests/{request['id']}").json()
+    requests = client.get("/api/sync/requests").json()
     coverage = client.get("/api/sync/coverage").json()
 
-    assert status["id"] == job["id"]
-    assert isinstance(items["items"], list)
+    assert status["id"] == request["id"]
+    assert requests["requests"][0]["id"] == request["id"]
     assert "analysis_daily_bars" in coverage
 
 
@@ -73,24 +76,26 @@ def test_sync_readiness_endpoint_reports_latest_analysis_coverage():
     assert payload["ready_for_analysis"] is True
 
 
-def test_full_pipeline_request_returns_existing_running_job_without_creating_duplicate(monkeypatch):
+def test_full_pipeline_request_enqueues_without_running_pipeline(monkeypatch):
     existing = runtime.sync_repository.create_job("full_daily_pipeline", "manual", ["fake"])
     runtime.sync_repository.mark_job_running(existing["id"])
-    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: pytest.fail("duplicate pipeline should not start"))
+    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: pytest.fail("sync API should not start pipeline"))
 
     response = client.post(
         "/api/sync/jobs",
         json={"job_type": "full_daily_pipeline", "start_date": "2024-01-01", "end_date": "2024-01-02"},
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     payload = response.json()
-    assert payload["id"] == existing["id"]
-    assert payload["status"] == "running"
+    assert payload["request_type"] == "full_daily_pipeline"
+    assert payload["status"] == "pending"
+    assert payload["scope"]["start_date"] == "2024-01-01"
+    assert payload["scope"]["end_date"] == "2024-01-02"
     assert len(runtime.sync_repository.list_jobs()) == 1
 
 
-def test_retry_sync_job_runs_failed_items_only(monkeypatch):
+def test_retry_sync_job_enqueues_failed_items_only(monkeypatch):
     source = runtime.sync_repository.create_job("full_daily_pipeline", "manual", ["fake"])
     runtime.sync_repository.finish_job(source["id"], "completed_with_errors", {"success": 1, "failed": 2})
     runtime.sync_repository.add_item(
@@ -128,40 +133,16 @@ def test_retry_sync_job_runs_failed_items_only(monkeypatch):
             "error_message": "temporary provider failure",
         },
     )
-    captured = {}
-
-    class Pipeline:
-        def run_full_daily_pipeline(self, start_date, end_date, requested_by, symbols=None):
-            captured.update(
-                {
-                    "start_date": start_date,
-                    "end_date": end_date,
-                    "requested_by": requested_by,
-                    "symbols": symbols,
-                }
-            )
-            return {
-                "id": 99,
-                "job_type": "full_daily_pipeline",
-                "status": "completed",
-                "requested_by": requested_by,
-                "summary": {"success": len(symbols), "failed": 0},
-            }
-
-    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: Pipeline())
+    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: pytest.fail("retry API should not start pipeline"))
 
     response = client.post(f"/api/sync/jobs/{source['id']}/retry")
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     payload = response.json()
-    assert payload["task_id"] == "99"
-    assert payload["retried_from_job_id"] == source["id"]
-    assert captured == {
-        "start_date": "2024-01-01",
-        "end_date": "2024-02-15",
-        "requested_by": f"retry:{source['id']}",
-        "symbols": ["BBB.SZ", "CCC.SZ"],
-    }
+    assert payload["request_type"] == "full_daily_pipeline"
+    assert payload["reason"] == f"retry:{source['id']}"
+    assert payload["priority"] == 90
+    assert payload["scope"] == {"start_date": "2024-01-01", "end_date": "2024-02-15", "symbols": ["BBB.SZ", "CCC.SZ"]}
 
 
 def test_retry_sync_job_rejects_jobs_without_failed_items(monkeypatch):
@@ -186,29 +167,19 @@ def test_retry_sync_job_rejects_jobs_without_failed_items(monkeypatch):
     assert response.json()["detail"] == "sync job has no failed items to retry"
 
 
-def test_v2_sync_job_types_dispatch_to_separate_pipelines(monkeypatch):
-    captured = []
+def test_v2_sync_job_types_are_enqueued_for_collector(monkeypatch):
+    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: pytest.fail("sync API should not dispatch collector work"))
 
-    class Pipeline:
-        def run_fundamental_refresh_pipeline(self, requested_by, symbols=None):
-            captured.append(("fundamental", requested_by, symbols))
-            return {"id": 11, "job_type": "fundamental_refresh_pipeline", "status": "completed", "summary": {"success": 1}}
+    fundamental_response = client.post("/api/sync/jobs", json={"job_type": "fundamental_refresh_pipeline", "symbols": ["AAA.SZ"]})
+    market_response = client.post("/api/sync/jobs", json={"job_type": "market_structure_pipeline"})
 
-        def run_market_structure_pipeline(self, requested_by):
-            captured.append(("market", requested_by, None))
-            return {"id": 12, "job_type": "market_structure_pipeline", "status": "completed", "summary": {"success": 1}}
-
-    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: Pipeline())
-
-    fundamental = client.post("/api/sync/jobs", json={"job_type": "fundamental_refresh_pipeline", "symbols": ["AAA.SZ"]}).json()
-    market = client.post("/api/sync/jobs", json={"job_type": "market_structure_pipeline"}).json()
-
-    assert fundamental["task_id"] == "11"
-    assert market["task_id"] == "12"
-    assert captured == [
-        ("fundamental", "manual", ["AAA.SZ"]),
-        ("market", "manual", None),
-    ]
+    assert fundamental_response.status_code == 202
+    assert market_response.status_code == 202
+    fundamental = fundamental_response.json()
+    market = market_response.json()
+    assert fundamental["request_type"] == "fundamental_refresh_pipeline"
+    assert fundamental["scope"]["symbols"] == ["AAA.SZ"]
+    assert market["request_type"] == "market_structure_pipeline"
 
 
 def test_stock_data_endpoints_return_local_analysis_rows():
@@ -311,38 +282,27 @@ def test_market_dashboard_does_not_start_sync_when_yesterday_data_exists(monkeyp
     assert response.json()["freshness"]["latest_trade_date"] == "2024-01-13"
 
 
-def test_market_dashboard_starts_yesterday_sync_when_local_data_is_missing(monkeypatch):
+def test_market_dashboard_enqueues_sync_request_when_local_data_is_missing(monkeypatch):
     class FixedDate:
         @classmethod
         def today(cls):
             return date(2026, 7, 6)
 
-    captured = {}
-
-    class Pipeline:
-        def run_full_daily_pipeline(self, start_date, end_date, requested_by, symbols=None):
-            captured.update(
-                {
-                    "start_date": start_date,
-                    "end_date": end_date,
-                    "requested_by": requested_by,
-                    "symbols": symbols,
-                }
-            )
-            return {"id": 91, "job_type": "full_daily_pipeline", "status": "completed", "summary": {"success": 1, "failed": 0}}
-
     monkeypatch.setattr(api_app_module, "date", FixedDate)
-    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: Pipeline())
+    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: pytest.fail("dashboard should not run sync pipeline"))
 
     response = client.get("/api/market/dashboard")
 
     assert response.status_code == 200
-    assert captured == {
-        "start_date": "2026-07-05",
-        "end_date": "2026-07-05",
-        "requested_by": "dashboard:auto",
-        "symbols": None,
-    }
+    payload = response.json()
+    assert payload["data_status"]["dataset"] == "market_dashboard"
+    assert payload["data_status"]["status"] == "stale"
+    assert payload["data_status"]["pending_request_id"]
+    queued = runtime.sync_repository.get_sync_request(payload["data_status"]["pending_request_id"])
+    assert queued["request_type"] == "full_daily_pipeline"
+    assert queued["reason"] == "dashboard:auto"
+    assert queued["scope"]["start_date"] == "2026-07-05"
+    assert queued["scope"]["end_date"] == "2026-07-05"
 
 
 def test_market_dashboard_does_not_fetch_live_miana_rankings_on_click(monkeypatch):
@@ -424,7 +384,7 @@ def test_stock_overview_does_not_auto_refresh_missing_enterprise_research_by_def
             return {"id": 88, "status": "completed", "summary": {"success": 1, "metadata_errors": 0}}
 
     runtime.analysis_repository = repository
-    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: Pipeline())
+    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: pytest.fail("overview read should not start pipeline"))
 
     response = client.get("/api/stocks/AAA.SZ/overview")
 
@@ -475,13 +435,97 @@ def test_stock_overview_refresh_missing_triggers_enterprise_research_once(monkey
             return {"id": 88, "status": "completed", "summary": {"success": 1, "metadata_errors": 0}}
 
     runtime.analysis_repository = repository
-    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: Pipeline())
+    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: pytest.fail("overview refresh should enqueue collector request"))
 
     response = client.get("/api/stocks/AAA.SZ/overview?refresh_missing=true")
 
     assert response.status_code == 200
-    assert captured == {"requested_by": "overview:auto:AAA.SZ", "symbols": ["AAA.SZ"]}
-    assert response.json()["officers"] == [{"officer_name": "Officer A", "title": "董事长"}]
+    queued = runtime.sync_repository.list_sync_requests()[0]
+    assert queued["request_type"] == "fundamental_refresh_pipeline"
+    assert queued["reason"] == "overview:on-demand:AAA.SZ"
+    assert queued["priority"] == 100
+    assert queued["scope"] == {"symbols": ["AAA.SZ"]}
+    assert response.json()["officers"] == []
+
+
+def test_stock_overview_refresh_missing_reuses_existing_on_demand_request(monkeypatch):
+    class Repository:
+        def stock_research_snapshot(self, symbol):
+            return {
+                "stock": {"symbol": symbol},
+                "latest_bar": None,
+                "company_profile": None,
+                "share_capital": [],
+                "corporate_actions": [],
+                "holders": [],
+                "officers": [],
+                "officer_rewards": [],
+                "data_quality": {
+                    "enterprise_modules": {
+                        "holders": {"rows": 0, "status": "missing"},
+                        "officers": {"rows": 0, "status": "missing"},
+                        "officer_rewards": {"rows": 0, "status": "missing"},
+                    }
+                },
+            }
+
+    runtime.analysis_repository = Repository()
+    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: pytest.fail("overview refresh should enqueue collector request"))
+
+    first = client.get("/api/stocks/AAA.SZ/overview?refresh_missing=true")
+    second = client.get("/api/stocks/AAA.SZ/overview?refresh_missing=true")
+
+    queued = [
+        request
+        for request in runtime.sync_repository.list_sync_requests()
+        if request["request_type"] == "fundamental_refresh_pipeline" and request["scope"] == {"symbols": ["AAA.SZ"]}
+    ]
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len(queued) == 1
+    assert queued[0]["reason"] == "overview:on-demand:AAA.SZ"
+    assert queued[0]["priority"] == 100
+
+
+def test_stock_overview_refresh_missing_skips_recent_enterprise_attempt(monkeypatch):
+    class Repository:
+        def stock_research_snapshot(self, symbol):
+            return {
+                "stock": {"symbol": symbol},
+                "latest_bar": None,
+                "company_profile": None,
+                "share_capital": [],
+                "corporate_actions": [],
+                "holders": [],
+                "officers": [],
+                "officer_rewards": [],
+                "data_quality": {
+                    "enterprise_modules": {
+                        "holders": {"rows": 0, "status": "missing"},
+                        "officers": {"rows": 0, "status": "missing"},
+                        "officer_rewards": {"rows": 0, "status": "missing"},
+                    }
+                },
+            }
+
+    runtime.analysis_repository = Repository()
+    runtime.sync_repository.upsert_dataset_freshness(
+        "stock_research_context",
+        scope_key="AAA.SZ",
+        status="empty",
+        rows=0,
+        owner_job_type="fundamental_refresh_pipeline",
+    )
+
+    response = client.get("/api/stocks/AAA.SZ/overview?refresh_missing=true")
+
+    queued = [
+        request
+        for request in runtime.sync_repository.list_sync_requests()
+        if request["request_type"] == "fundamental_refresh_pipeline" and request["scope"] == {"symbols": ["AAA.SZ"]}
+    ]
+    assert response.status_code == 200
+    assert queued == []
 
 
 def test_stock_overview_refresh_missing_triggers_when_profile_exists_but_people_missing(monkeypatch):
@@ -525,13 +569,17 @@ def test_stock_overview_refresh_missing_triggers_when_profile_exists_but_people_
             return {"id": 89, "status": "completed", "summary": {"success": 1, "metadata_errors": 0}}
 
     runtime.analysis_repository = repository
-    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: Pipeline())
+    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: pytest.fail("overview refresh should enqueue collector request"))
 
     response = client.get("/api/stocks/AAA.SZ/overview?refresh_missing=true")
 
     assert response.status_code == 200
-    assert captured == {"requested_by": "overview:auto:AAA.SZ", "symbols": ["AAA.SZ"]}
-    assert response.json()["officers"] == [{"officer_name": "Officer A", "title": "董事长"}]
+    queued = runtime.sync_repository.list_sync_requests()[0]
+    assert queued["request_type"] == "fundamental_refresh_pipeline"
+    assert queued["reason"] == "overview:on-demand:AAA.SZ"
+    assert queued["priority"] == 100
+    assert queued["scope"] == {"symbols": ["AAA.SZ"]}
+    assert response.json()["officers"] == []
 
 
 def test_data_center_coverage_endpoint_returns_v2_sections():
@@ -561,15 +609,17 @@ def test_stock_bars_refresh_triggers_single_symbol_detail_sync(monkeypatch):
             )
             return {"id": 77, "status": "completed", "summary": {"success": 1, "failed": 0}}
 
-    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: Pipeline())
+    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: pytest.fail("bars refresh should enqueue collector request"))
 
     response = client.get("/api/stocks/SAMPLE1/bars?refresh=true")
 
     assert response.status_code == 200
-    assert captured["requested_by"] == "detail:SAMPLE1"
-    assert captured["symbols"] == ["SAMPLE1"]
-    assert captured["start_date"] == "2024-01-14"
-    assert captured["end_date"] == date.today().isoformat()
+    queued = runtime.sync_repository.list_sync_requests()[0]
+    assert queued["request_type"] == "full_daily_pipeline"
+    assert queued["reason"] == "detail:SAMPLE1"
+    assert queued["scope"]["symbols"] == ["SAMPLE1"]
+    assert queued["scope"]["start_date"] == "2024-01-14"
+    assert queued["scope"]["end_date"] == date.today().isoformat()
 
 
 def test_screen_endpoint_returns_latest_rows():
