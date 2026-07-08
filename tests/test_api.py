@@ -6,7 +6,7 @@ from importlib import import_module
 from stock_analyzer_app.api import app
 from stock_analyzer_app.api.app import runtime
 from stock_analyzer_app.storage.repositories import InMemoryAnalysisRepository
-from stock_analyzer_app.sync import InMemorySyncRepository, SyncService
+from stock_analyzer_app.sync import InMemorySyncRepository
 
 
 client = TestClient(app)
@@ -17,7 +17,6 @@ api_app_module = import_module("stock_analyzer_app.api.app")
 def reset_runtime_to_in_memory():
     runtime.analysis_repository = InMemoryAnalysisRepository()
     runtime.sync_repository = InMemorySyncRepository()
-    runtime.sync_service = SyncService(runtime.sync_repository, providers=[])
 
 
 def test_health_endpoint():
@@ -42,17 +41,16 @@ def test_sample_endpoint_returns_symbols_and_bars():
 
 
 def test_sync_job_endpoints_create_and_report_status():
-    monkeypatch_message = "sync API should enqueue requests, not run pipelines"
     response = client.post(
         "/api/sync/jobs",
-        json={"job_type": "sync_daily_bars", "symbols": ["SAMPLE1"], "start_date": "2024-01-01", "end_date": "2024-01-02"},
+        json={"job_type": "full_daily_pipeline", "symbols": ["SAMPLE1"], "start_date": "2024-01-01", "end_date": "2024-01-02"},
     )
 
     assert response.status_code == 202
     request = response.json()
     assert request["request_id"] == request["id"]
-    assert request["request_type"] == "sync_daily_bars"
-    assert request["dataset"] == "sync_daily_bars"
+    assert request["request_type"] == "full_daily_pipeline"
+    assert request["dataset"] == "full_daily_pipeline"
     assert request["status"] == "pending"
 
     status = client.get(f"/api/sync/requests/{request['id']}").json()
@@ -622,16 +620,10 @@ def test_stock_bars_refresh_triggers_single_symbol_detail_sync(monkeypatch):
     assert queued["scope"]["end_date"] == date.today().isoformat()
 
 
-def test_screen_endpoint_returns_latest_rows():
+def test_legacy_screen_endpoint_is_removed():
     response = client.post("/api/screen", json={"signal_filter": "all"})
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["summary"]["success"] >= 1
-    assert payload["results"]
-    assert {"symbol", "trade_date", "close", "expma17", "expma50", "trend_state", "raw_flags"} <= set(
-        payload["results"][0]
-    )
+    assert response.status_code == 404
 
 
 def test_screening_task_endpoints_return_results():
@@ -644,10 +636,27 @@ def test_screening_task_endpoints_return_results():
     assert "results" in client.get(f"/api/screenings/{task['task_id']}/results").json()
 
 
-def test_backtest_endpoint_returns_summary_trades_and_equity():
+def test_legacy_backtest_endpoint_is_removed():
     symbol = client.get("/api/stocks").json()["stocks"][0]["symbol"]
     response = client.post(
         "/api/backtest",
+        json={
+            "symbols": [symbol],
+            "start_date": "2024-01-01",
+            "end_date": "2024-12-31",
+            "initial_capital": 50000,
+            "fee_rate": 0,
+            "slippage_rate": 0,
+        },
+    )
+
+    assert response.status_code == 404
+
+
+def test_backtest_endpoint_returns_summary_trades_and_equity():
+    symbol = client.get("/api/stocks").json()["stocks"][0]["symbol"]
+    response = client.post(
+        "/api/backtests",
         json={
             "symbols": [symbol],
             "start_date": "2024-01-01",

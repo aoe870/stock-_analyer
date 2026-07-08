@@ -205,7 +205,6 @@ The collector maps request types to pipeline calls:
 | Request Type | Pipeline Call |
 | --- | --- |
 | `full_daily_pipeline` | `run_full_daily_pipeline(start_date, end_date, symbols)` |
-| `sync_daily_bars` | `run_full_daily_pipeline(start_date, end_date, symbols)` |
 | `fundamental_refresh_pipeline` | `run_fundamental_refresh_pipeline(symbols)` |
 | `market_structure_pipeline` | `run_market_structure_pipeline()` |
 

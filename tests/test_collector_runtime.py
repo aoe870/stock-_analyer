@@ -42,6 +42,25 @@ def test_collector_processes_pending_full_daily_request():
     ]
 
 
+def test_collector_rejects_legacy_sync_daily_bars_request_type():
+    from stock_analyzer_app.collector import CollectorService
+
+    repository = InMemorySyncRepository()
+    request = repository.create_sync_request(
+        "sync_daily_bars",
+        dataset="sync_daily_bars",
+        scope={"start_date": "2026-07-05", "end_date": "2026-07-05"},
+        reason="legacy:test",
+    )
+
+    processed = CollectorService(repository=repository, pipeline_factory=lambda: object()).process_pending_requests(limit=1)
+
+    failed = repository.get_sync_request(request["id"])
+    assert processed == 1
+    assert failed["status"] == "failed"
+    assert "unsupported sync request type" in failed["error_message"]
+
+
 def test_collector_skips_completed_requests_without_starving_pending_work():
     from stock_analyzer_app.collector import CollectorService
 

@@ -1,4 +1,3 @@
-from stock_analyzer_app.sync.service import InMemorySyncRepository, SyncService
+from stock_analyzer_app.sync.service import InMemorySyncRepository
 
-__all__ = ["InMemorySyncRepository", "SyncService"]
-
+__all__ = ["InMemorySyncRepository"]

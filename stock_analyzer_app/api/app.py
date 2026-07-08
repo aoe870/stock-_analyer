@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Any
 from datetime import date, datetime, timedelta, timezone
-import threading
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,10 +14,10 @@ from stock_analyzer_app.config import AppSettings
 from stock_analyzer_app.data.sample import sample_symbol_bars
 from stock_analyzer_app.data_provider.demo_provider import DemoAshareProvider
 from stock_analyzer_app.data_provider.provider_chain import build_provider_chain
-from stock_analyzer_app.screening import screen_from_repository, screen_latest
+from stock_analyzer_app.screening import screen_from_repository
 from stock_analyzer_app.storage.repositories import InMemoryAnalysisRepository
 from stock_analyzer_app.storage.mysql import MySqlRepository, mysql_available
-from stock_analyzer_app.sync import InMemorySyncRepository, SyncService
+from stock_analyzer_app.sync import InMemorySyncRepository
 from stock_analyzer_app.sync.pipeline import DailySyncPipeline
 from stock_analyzer_app.tasks.scheduler import SchedulerService
 
@@ -31,12 +30,10 @@ class RuntimeState:
         self.settings = AppSettings.from_env()
         self.analysis_repository = InMemoryAnalysisRepository()
         self.sync_repository = InMemorySyncRepository()
-        self.sync_service = SyncService(self.sync_repository, providers=[])
         self.screening_tasks: dict[str, dict] = {}
         self.backtest_tasks: dict[str, dict] = {}
         self.backtest_runs: list[dict] = []
         self.scheduler_service: SchedulerService | None = None
-        self.dashboard_sync_lock = threading.Lock()
         self.configure_repositories()
 
     def configure_repositories(self) -> None:
@@ -48,7 +45,6 @@ class RuntimeState:
         else:
             self.analysis_repository = InMemoryAnalysisRepository()
             self.sync_repository = InMemorySyncRepository()
-        self.sync_service = SyncService(self.sync_repository, providers=[])
         self.scheduler_service = SchedulerService(
             self.settings,
             self.sync_repository,
@@ -398,10 +394,6 @@ def create_app() -> FastAPI:
     def stock_signals(symbol: str) -> list[dict]:
         return runtime.analysis_repository.signals(symbol)
 
-    @app.post("/api/screen")
-    def screen_legacy(request: ScreenRequest) -> dict[str, Any]:
-        return screen_latest(sample_symbol_bars(), trade_date=request.trade_date, signal_filter=request.signal_filter)
-
     @app.post("/api/screenings")
     def create_screening(request: ScreenRequest) -> dict[str, Any]:
         trade_date = request.trade_date or "9999-12-31"
@@ -454,10 +446,6 @@ def create_app() -> FastAPI:
         if not task:
             raise HTTPException(status_code=404, detail="screening task not found")
         return {"task_id": task_id, "results": task["results"], "summary": task["summary"]}
-
-    @app.post("/api/backtest")
-    def backtest_legacy(request: BacktestRequest) -> dict[str, Any]:
-        return _run_backtest_request(request)
 
     @app.post("/api/backtests")
     def create_backtest(request: BacktestRequest) -> dict[str, Any]:
@@ -560,13 +548,6 @@ def _list_sync_jobs() -> list[dict]:
     if hasattr(runtime.sync_repository, "list_jobs"):
         return runtime.sync_repository.list_jobs()
     return sorted(runtime.sync_repository.jobs.values(), key=lambda item: item["id"], reverse=True)
-
-
-def _active_sync_job(job_type: str) -> dict | None:
-    for job in _list_sync_jobs():
-        if job["job_type"] == job_type and job["status"] in {"pending", "running"} and _job_has_recent_activity(job):
-            return job
-    return None
 
 
 def _failed_retry_request(job_id: int) -> dict[str, Any]:
@@ -728,39 +709,6 @@ def _dashboard_data_status() -> dict[str, Any]:
         "pending_request_id": queued["id"],
         "message": "collector has not completed the latest trading day",
     }
-
-
-def _ensure_yesterday_data_for_dashboard() -> None:
-    _dashboard_data_status()
-
-
-def _completed_daily_sync_for_date(target_date: str) -> bool:
-    completed_statuses = {"completed", "completed_with_errors"}
-    for job in _list_sync_jobs():
-        if job.get("job_type") != "full_daily_pipeline" or job.get("status") not in completed_statuses:
-            continue
-        if not hasattr(runtime.sync_repository, "get_job_items"):
-            continue
-        try:
-            items = runtime.sync_repository.get_job_items(job["id"])
-        except Exception:  # noqa: BLE001 - dashboard should not fail if job history is partially unavailable.
-            continue
-        if any(str(item.get("date_start")) <= target_date <= str(item.get("date_end")) for item in items if item.get("date_start") and item.get("date_end")):
-            return True
-    return False
-
-
-def _job_has_recent_activity(job: dict, stale_after: timedelta = timedelta(minutes=30)) -> bool:
-    timestamps = [job.get("started_at"), job.get("created_at")]
-    try:
-        if hasattr(runtime.sync_repository, "get_job_items"):
-            timestamps.extend(item.get("updated_at") for item in runtime.sync_repository.get_job_items(job["id"]))
-    except Exception:  # noqa: BLE001 - stale detection should not break sync creation.
-        pass
-    parsed = [_parse_timestamp(value) for value in timestamps if value]
-    if not parsed:
-        return True
-    return datetime.now(timezone.utc) - max(parsed) <= stale_after
 
 
 def _database_health(settings: AppSettings) -> dict[str, Any]:

@@ -32,8 +32,14 @@ def test_start_app_script_bootstraps_database_and_server():
     assert "docker compose" in content
     assert "migrate_db.ps1" in content
     assert "seed_db.ps1" in content
-    assert "-m stock_analyzer_app" in content
+    assert "-m stock_analyzer_app api" in content
     assert "http://127.0.0.1:8000" in content
+
+
+def test_dev_server_script_uses_explicit_api_mode():
+    content = Path("scripts/dev_server.ps1").read_text(encoding="utf-8")
+
+    assert "-m stock_analyzer_app api" in content
 
 
 def test_docker_compose_declares_mysql_8_service():
@@ -154,13 +160,7 @@ def test_restore_requires_explicit_confirmation():
 def test_sync_once_exposes_supported_job_types():
     sync = Path("scripts/sync_once.ps1").read_text(encoding="utf-8")
 
-    for job_type in [
-        "sync_calendar",
-        "sync_stock_universe",
-        "sync_daily_bars",
-        "sync_adjustment_factors",
-        "aggregate_daily",
-        "compute_signals",
-        "full_daily_pipeline",
-    ]:
+    for job_type in ["full_daily_pipeline", "fundamental_refresh_pipeline", "market_structure_pipeline"]:
         assert job_type in sync
+    for legacy_job_type in ["sync_calendar", "sync_stock_universe", "sync_daily_bars", "sync_adjustment_factors", "aggregate_daily", "compute_signals"]:
+        assert legacy_job_type not in sync

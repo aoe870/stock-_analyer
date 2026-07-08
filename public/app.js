@@ -830,7 +830,7 @@ const app = Vue.createApp({
     },
 
     jobTypeLabel(value) {
-      return { full_daily_pipeline: "全量日线流程", sync_daily_bars: "同步日线", aggregate_daily: "生成分析日线", compute_signals: "计算策略信号" }[value] || value || "-";
+      return { full_daily_pipeline: "全量日线流程", fundamental_refresh_pipeline: "企业数据刷新", market_structure_pipeline: "市场结构刷新" }[value] || value || "-";
     },
 
     numberFormatter(row, column, value) {

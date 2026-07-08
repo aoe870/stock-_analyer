@@ -79,7 +79,7 @@ class CollectorService:
         scope = request.get("scope") or {}
         pipeline = self.pipeline_factory()
         requested_by = f"sync_request:{request['id']}"
-        if request_type in {"full_daily_pipeline", "sync_daily_bars"}:
+        if request_type == "full_daily_pipeline":
             pipeline.run_full_daily_pipeline(
                 start_date=scope.get("start_date") or "2024-01-01",
                 end_date=scope.get("end_date") or scope.get("start_date") or "2024-12-31",

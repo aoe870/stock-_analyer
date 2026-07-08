@@ -43,4 +43,4 @@ if ($OpenBrowser) {
     Start-Process "http://127.0.0.1:8000"
 }
 
-& $python -m stock_analyzer_app
+& $python -m stock_analyzer_app api

@@ -3,7 +3,7 @@ import pytest
 from stock_analyzer_app.config.settings import AppSettings, DatabaseSettings
 from stock_analyzer_app.data_provider.base import StockDataProvider
 from stock_analyzer_app.data_provider.provider_chain import build_provider_chain
-from stock_analyzer_app.sync.service import InMemorySyncRepository, SyncService
+from stock_analyzer_app.sync.service import InMemorySyncRepository
 from stock_analyzer_app.sync.pipeline import DailySyncPipeline
 from stock_analyzer_app.tasks.scheduler import SyncSchedulerGuard
 import threading
@@ -94,15 +94,41 @@ def test_provider_chain_skips_tushare_without_token():
     assert [provider.name for provider in chain.providers] == ["akshare", "eastmoney"]
 
 
-def test_sync_daily_bars_records_completed_with_errors_for_partial_success():
-    repository = InMemorySyncRepository()
-    provider = FakeProvider("fake", failing_symbols={"BBB"})
-    service = SyncService(repository=repository, providers=[provider])
+def test_daily_pipeline_records_completed_with_errors_for_partial_symbol_success():
+    class RepositoryWithDailyPipelineSupport(InMemorySyncRepository):
+        def upsert_stocks(self, rows):
+            self.stocks = rows
 
-    job = service.sync_daily_bars(["AAA", "BBB"], "2024-01-02", "2024-01-02", requested_by="manual")
+        def upsert_trading_calendar(self, rows):
+            self.calendar = rows
+
+        def upsert_adjustment_factors(self, rows):
+            self.factors = rows
+
+        def upsert_analysis_daily_bars(self, rows):
+            self.analysis = rows
+
+        def upsert_daily_indicators(self, rows):
+            self.indicators = rows
+
+        def upsert_strategy_signals(self, rows):
+            self.signals = rows
+
+    repository = RepositoryWithDailyPipelineSupport()
+    provider = FakeProvider("fake", failing_symbols={"BBB"})
+    pipeline = DailySyncPipeline(repository=repository, providers=[provider])
+
+    job = pipeline.run_full_daily_pipeline(
+        "2024-01-02",
+        "2024-01-02",
+        requested_by="manual",
+        symbols=["AAA", "BBB"],
+    )
 
     assert job["status"] == "completed_with_errors"
-    assert job["summary"] == {"success": 1, "skipped": 0, "failed": 1, "retryable": 0, "provider_fallback": 0}
+    assert job["summary"]["success"] == 1
+    assert job["summary"]["failed"] == 1
+    assert job["summary"]["provider_fallback"] == 0
     assert repository.daily_bars[0]["symbol"] == "AAA"
     assert {item["status"] for item in repository.items[job["id"]]} == {"success", "failed"}
 

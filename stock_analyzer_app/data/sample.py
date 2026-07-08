@@ -1,4 +1,4 @@
-from stock_analyzer_app.strategy import compute_expma_signals
+from stock_analyzer_app.strategies import compute_expma_signals
 
 
 def sample_symbol_bars() -> dict[str, list[dict]]:
@@ -28,4 +28,3 @@ def sample_symbol_bars() -> dict[str, list[dict]]:
             )
         output[symbol] = compute_expma_signals(bars, warmup=0)
     return output
-

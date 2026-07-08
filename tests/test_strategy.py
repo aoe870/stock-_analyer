@@ -1,4 +1,4 @@
-from stock_analyzer_app.strategy import compute_expma_signals, select_signal
+from stock_analyzer_app.strategies import compute_expma_signals, select_signal
 
 
 def bars_from_closes(closes):

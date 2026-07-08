@@ -1,8 +1,3 @@
-from collections.abc import Mapping
-
-from stock_analyzer_app.strategies import compute_expma_signals
-
-
 BUY_LIKE = {"BUY", "RE_BUY", "RE_BUY_50"}
 RISK_REDUCTION = {"HALF_SELL", "CLEAR_1", "CLEAR_2"}
 
@@ -29,45 +24,6 @@ def screen_from_repository(
         },
         "results": sorted(results, key=lambda item: item["symbol"]),
     }
-
-
-def screen_latest(
-    symbol_bars: Mapping[str, list[dict]],
-    trade_date: str | None = None,
-    signal_filter: str = "all",
-) -> dict:
-    results: list[dict] = []
-    summary = {"success": 0, "skipped": 0, "failed": 0, "stale": 0}
-
-    for symbol, bars in symbol_bars.items():
-        try:
-            rows = _ensure_signals(bars)
-            candidates = [row for row in rows if trade_date is None or row["trade_date"] <= trade_date]
-            if not candidates:
-                summary["skipped"] += 1
-                continue
-            latest = candidates[-1]
-            result = _screen_row(latest)
-            if _passes_filter(result, signal_filter):
-                results.append(result)
-            summary["success"] += 1
-        except Exception as exc:  # noqa: BLE001
-            summary["failed"] += 1
-            results.append({"symbol": symbol, "error": str(exc)})
-
-    return {
-        "summary": summary,
-        "results": sorted(results, key=lambda item: (item.get("signal") or "", item.get("symbol") or "")),
-    }
-
-
-def _ensure_signals(bars: list[dict]) -> list[dict]:
-    if not bars:
-        return []
-    if "expma17" in bars[-1] and "raw_flags" in bars[-1]:
-        return sorted(bars, key=lambda row: row["trade_date"])
-    return compute_expma_signals(bars)
-
 
 def _screen_row(row: dict) -> dict:
     close = float(row["close"])
