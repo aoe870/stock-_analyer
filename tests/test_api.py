@@ -376,8 +376,11 @@ def test_stock_overview_does_not_auto_refresh_missing_enterprise_research_by_def
 
     class Pipeline:
         def run_fundamental_refresh_pipeline(self, requested_by, symbols=None):
+            pytest.fail("overview refresh should use the lightweight people refresh")
+
+        def run_enterprise_people_refresh(self, requested_by, symbol):
             captured["requested_by"] = requested_by
-            captured["symbols"] = symbols
+            captured["symbol"] = symbol
             repository.synced = True
             return {"id": 88, "status": "completed", "summary": {"success": 1, "metadata_errors": 0}}
 
@@ -391,7 +394,7 @@ def test_stock_overview_does_not_auto_refresh_missing_enterprise_research_by_def
     assert response.json()["officers"] == []
 
 
-def test_stock_overview_refresh_missing_triggers_enterprise_research_once(monkeypatch):
+def test_stock_overview_refresh_missing_runs_enterprise_research_and_returns_fresh_snapshot(monkeypatch):
     captured = {}
 
     class Repository:
@@ -427,27 +430,32 @@ def test_stock_overview_refresh_missing_triggers_enterprise_research_once(monkey
 
     class Pipeline:
         def run_fundamental_refresh_pipeline(self, requested_by, symbols=None):
+            pytest.fail("overview refresh should use the lightweight people refresh")
+
+        def run_enterprise_people_refresh(self, requested_by, symbol):
             captured["requested_by"] = requested_by
-            captured["symbols"] = symbols
+            captured["symbol"] = symbol
             repository.synced = True
             return {"id": 88, "status": "completed", "summary": {"success": 1, "metadata_errors": 0}}
 
     runtime.analysis_repository = repository
-    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: pytest.fail("overview refresh should enqueue collector request"))
+    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: Pipeline())
 
     response = client.get("/api/stocks/AAA.SZ/overview?refresh_missing=true")
 
     assert response.status_code == 200
-    queued = runtime.sync_repository.list_sync_requests()[0]
-    assert queued["request_type"] == "fundamental_refresh_pipeline"
-    assert queued["reason"] == "overview:on-demand:AAA.SZ"
-    assert queued["priority"] == 100
-    assert queued["scope"] == {"symbols": ["AAA.SZ"]}
-    assert response.json()["officers"] == []
+    assert captured == {"requested_by": "overview:on-demand:AAA.SZ", "symbol": "AAA.SZ"}
+    assert runtime.sync_repository.list_sync_requests() == []
+    assert response.json()["officers"] == [{"officer_name": "Officer A", "title": "董事长"}]
+    assert response.json()["data_quality"]["last_refresh"]["status"] == "completed"
 
 
-def test_stock_overview_refresh_missing_reuses_existing_on_demand_request(monkeypatch):
+def test_stock_overview_refresh_missing_does_not_wait_for_existing_on_demand_request(monkeypatch):
+    captured = {}
+
     class Repository:
+        synced = False
+
         def stock_research_snapshot(self, symbol):
             return {
                 "stock": {"symbol": symbol},
@@ -456,37 +464,52 @@ def test_stock_overview_refresh_missing_reuses_existing_on_demand_request(monkey
                 "share_capital": [],
                 "corporate_actions": [],
                 "holders": [],
-                "officers": [],
+                "officers": [{"officer_name": "Officer A", "title": "董事长"}] if self.synced else [],
                 "officer_rewards": [],
                 "data_quality": {
                     "enterprise_modules": {
                         "holders": {"rows": 0, "status": "missing"},
-                        "officers": {"rows": 0, "status": "missing"},
+                        "officers": {"rows": 1 if self.synced else 0, "status": "synced" if self.synced else "missing"},
                         "officer_rewards": {"rows": 0, "status": "missing"},
                     }
                 },
             }
 
-    runtime.analysis_repository = Repository()
-    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: pytest.fail("overview refresh should enqueue collector request"))
+    repository = Repository()
 
-    first = client.get("/api/stocks/AAA.SZ/overview?refresh_missing=true")
-    second = client.get("/api/stocks/AAA.SZ/overview?refresh_missing=true")
+    class Pipeline:
+        def run_fundamental_refresh_pipeline(self, requested_by, symbols=None):
+            pytest.fail("overview refresh should use the lightweight people refresh")
 
-    queued = [
-        request
-        for request in runtime.sync_repository.list_sync_requests()
-        if request["request_type"] == "fundamental_refresh_pipeline" and request["scope"] == {"symbols": ["AAA.SZ"]}
-    ]
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert len(queued) == 1
-    assert queued[0]["reason"] == "overview:on-demand:AAA.SZ"
-    assert queued[0]["priority"] == 100
+        def run_enterprise_people_refresh(self, requested_by, symbol):
+            captured["requested_by"] = requested_by
+            captured["symbol"] = symbol
+            repository.synced = True
+            return {"id": 90, "status": "completed", "summary": {"success": 1, "metadata_errors": 0}}
+
+    runtime.analysis_repository = repository
+    runtime.sync_repository.create_sync_request(
+        "fundamental_refresh_pipeline",
+        dataset="stock_research_context",
+        scope={"symbols": ["AAA.SZ"]},
+        priority=100,
+        reason="overview:on-demand:AAA.SZ",
+    )
+    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: Pipeline())
+
+    response = client.get("/api/stocks/AAA.SZ/overview?refresh_missing=true")
+
+    assert response.status_code == 200
+    assert captured == {"requested_by": "overview:on-demand:AAA.SZ", "symbol": "AAA.SZ"}
+    assert response.json()["officers"] == [{"officer_name": "Officer A", "title": "董事长"}]
 
 
-def test_stock_overview_refresh_missing_skips_recent_enterprise_attempt(monkeypatch):
+def test_stock_overview_refresh_missing_ignores_recent_attempt_for_explicit_request(monkeypatch):
+    captured = {}
+
     class Repository:
+        synced = False
+
         def stock_research_snapshot(self, symbol):
             return {
                 "stock": {"symbol": symbol},
@@ -495,18 +518,30 @@ def test_stock_overview_refresh_missing_skips_recent_enterprise_attempt(monkeypa
                 "share_capital": [],
                 "corporate_actions": [],
                 "holders": [],
-                "officers": [],
+                "officers": [{"officer_name": "Officer A", "title": "董事长"}] if self.synced else [],
                 "officer_rewards": [],
                 "data_quality": {
                     "enterprise_modules": {
                         "holders": {"rows": 0, "status": "missing"},
-                        "officers": {"rows": 0, "status": "missing"},
+                        "officers": {"rows": 1 if self.synced else 0, "status": "synced" if self.synced else "missing"},
                         "officer_rewards": {"rows": 0, "status": "missing"},
                     }
                 },
             }
 
-    runtime.analysis_repository = Repository()
+    repository = Repository()
+
+    class Pipeline:
+        def run_fundamental_refresh_pipeline(self, requested_by, symbols=None):
+            pytest.fail("overview refresh should use the lightweight people refresh")
+
+        def run_enterprise_people_refresh(self, requested_by, symbol):
+            captured["requested_by"] = requested_by
+            captured["symbol"] = symbol
+            repository.synced = True
+            return {"id": 91, "status": "completed", "summary": {"success": 1, "metadata_errors": 0}}
+
+    runtime.analysis_repository = repository
     runtime.sync_repository.upsert_dataset_freshness(
         "stock_research_context",
         scope_key="AAA.SZ",
@@ -514,16 +549,13 @@ def test_stock_overview_refresh_missing_skips_recent_enterprise_attempt(monkeypa
         rows=0,
         owner_job_type="fundamental_refresh_pipeline",
     )
+    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: Pipeline())
 
     response = client.get("/api/stocks/AAA.SZ/overview?refresh_missing=true")
 
-    queued = [
-        request
-        for request in runtime.sync_repository.list_sync_requests()
-        if request["request_type"] == "fundamental_refresh_pipeline" and request["scope"] == {"symbols": ["AAA.SZ"]}
-    ]
     assert response.status_code == 200
-    assert queued == []
+    assert captured == {"requested_by": "overview:on-demand:AAA.SZ", "symbol": "AAA.SZ"}
+    assert response.json()["officers"] == [{"officer_name": "Officer A", "title": "董事长"}]
 
 
 def test_stock_overview_refresh_missing_triggers_when_profile_exists_but_people_missing(monkeypatch):
@@ -561,23 +593,23 @@ def test_stock_overview_refresh_missing_triggers_when_profile_exists_but_people_
 
     class Pipeline:
         def run_fundamental_refresh_pipeline(self, requested_by, symbols=None):
+            pytest.fail("overview refresh should use the lightweight people refresh")
+
+        def run_enterprise_people_refresh(self, requested_by, symbol):
             captured["requested_by"] = requested_by
-            captured["symbols"] = symbols
+            captured["symbol"] = symbol
             repository.synced = True
             return {"id": 89, "status": "completed", "summary": {"success": 1, "metadata_errors": 0}}
 
     runtime.analysis_repository = repository
-    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: pytest.fail("overview refresh should enqueue collector request"))
+    monkeypatch.setattr(runtime, "make_daily_pipeline", lambda: Pipeline())
 
     response = client.get("/api/stocks/AAA.SZ/overview?refresh_missing=true")
 
     assert response.status_code == 200
-    queued = runtime.sync_repository.list_sync_requests()[0]
-    assert queued["request_type"] == "fundamental_refresh_pipeline"
-    assert queued["reason"] == "overview:on-demand:AAA.SZ"
-    assert queued["priority"] == 100
-    assert queued["scope"] == {"symbols": ["AAA.SZ"]}
-    assert response.json()["officers"] == []
+    assert captured == {"requested_by": "overview:on-demand:AAA.SZ", "symbol": "AAA.SZ"}
+    assert runtime.sync_repository.list_sync_requests() == []
+    assert response.json()["officers"] == [{"officer_name": "Officer A", "title": "董事长"}]
 
 
 def test_data_center_coverage_endpoint_returns_v2_sections():

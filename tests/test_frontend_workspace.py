@@ -154,6 +154,24 @@ def test_frontend_officer_reward_table_uses_backend_title_and_hold_volume_fields
     assert '<el-table-column prop="hold_volume" label="持股数"' in js
 
 
+def test_frontend_people_tables_use_backend_field_names():
+    js = read_public("app.js")
+
+    for marker in ['prop="hold_volume"', 'prop="hold_ratio"', 'prop="start_date"']:
+        assert marker in js
+    for legacy_marker in ["shareholding_amount", "shareholding_ratio", "term_start_date"]:
+        assert legacy_marker not in js
+
+
+def test_frontend_people_tab_surfaces_enterprise_refresh_errors():
+    js = read_public("app.js")
+
+    assert "enterpriseRefreshMessage" in js
+    assert 'v-if="enterpriseRefreshMessage"' in js
+    assert "stockOverview.data_quality?.last_refresh" in js
+    assert "metadata_errors" in js
+
+
 def test_frontend_lazy_loads_enterprise_people_tab_with_refresh_missing_flag():
     js = read_public("app.js")
 

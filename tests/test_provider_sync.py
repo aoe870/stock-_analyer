@@ -546,6 +546,107 @@ def test_fundamental_refresh_pipeline_persists_research_data_without_daily_bars(
     assert freshness["owner_job_type"] == "fundamental_refresh_pipeline"
 
 
+def test_enterprise_people_refresh_only_persists_holder_officer_data():
+    class RepositoryWithPeople(InMemorySyncRepository):
+        def upsert_income_statements(self, rows):
+            raise AssertionError("people refresh should not fetch financial statements")
+
+        def upsert_balance_sheets(self, rows):
+            raise AssertionError("people refresh should not fetch financial statements")
+
+        def upsert_cashflow_statements(self, rows):
+            raise AssertionError("people refresh should not fetch financial statements")
+
+        def upsert_stock_top10_holders(self, rows):
+            self.holders = rows
+
+        def upsert_stock_company_officers(self, rows):
+            self.officers = rows
+
+        def upsert_stock_officer_rewards(self, rows):
+            self.rewards = rows
+
+    class PeopleProvider(FakeProvider):
+        def __init__(self, name):
+            super().__init__(name)
+            self.calls = []
+
+        def fetch_income_statements(self, symbol):
+            self.calls.append("income")
+            return []
+
+        def fetch_top10_holders(self, symbol):
+            self.calls.append("holders")
+            return [{"symbol": symbol, "provider": self.name, "report_date": "2024-12-31", "holder_name": "Holder A"}]
+
+        def fetch_company_officers(self, symbol):
+            self.calls.append("officers")
+            return [{"symbol": symbol, "provider": self.name, "officer_name": "Officer A", "title": "Chairman"}]
+
+        def fetch_officer_rewards(self, symbol):
+            self.calls.append("rewards")
+            return [{"symbol": symbol, "provider": self.name, "report_date": "2024-12-31", "officer_name": "Officer A"}]
+
+    repository = RepositoryWithPeople()
+    provider = PeopleProvider("miana")
+    pipeline = DailySyncPipeline(repository=repository, providers=[provider])
+
+    job = pipeline.run_enterprise_people_refresh(requested_by="unit", symbol="AAA.SZ")
+
+    assert job["status"] == "completed"
+    assert set(provider.calls) == {"holders", "officers", "rewards"}
+    assert repository.holders[0]["holder_name"] == "Holder A"
+    assert repository.officers[0]["officer_name"] == "Officer A"
+    assert repository.rewards[0]["officer_name"] == "Officer A"
+    freshness = repository.get_dataset_freshness("stock_research_context", "AAA.SZ")
+    assert freshness["rows"] == 3
+
+
+def test_enterprise_people_refresh_fetches_people_endpoints_concurrently():
+    class RepositoryWithPeople(InMemorySyncRepository):
+        def upsert_stock_top10_holders(self, rows):
+            self.holders = rows
+
+        def upsert_stock_company_officers(self, rows):
+            self.officers = rows
+
+        def upsert_stock_officer_rewards(self, rows):
+            self.rewards = rows
+
+    barrier = threading.Barrier(3)
+    lock = threading.Lock()
+    active = {"count": 0, "max": 0}
+
+    class SlowPeopleProvider(FakeProvider):
+        def _wait(self, name, symbol):
+            with lock:
+                active["count"] += 1
+                active["max"] = max(active["max"], active["count"])
+            try:
+                barrier.wait(timeout=5)
+                return [{"symbol": symbol, "provider": self.name, "report_date": "2024-12-31", "officer_name": name, "holder_name": name}]
+            finally:
+                with lock:
+                    active["count"] -= 1
+
+        def fetch_top10_holders(self, symbol):
+            return self._wait("Holder A", symbol)
+
+        def fetch_company_officers(self, symbol):
+            return self._wait("Officer A", symbol)
+
+        def fetch_officer_rewards(self, symbol):
+            return self._wait("Officer A", symbol)
+
+    repository = RepositoryWithPeople()
+    pipeline = DailySyncPipeline(repository=repository, providers=[SlowPeopleProvider("miana")])
+
+    job = pipeline.run_enterprise_people_refresh(requested_by="unit", symbol="AAA.SZ")
+
+    assert job["status"] == "completed"
+    assert active["max"] >= 2
+
+
 def test_market_structure_pipeline_persists_indexes_sectors_and_constituents():
     class RepositoryWithMarketStructure(InMemorySyncRepository):
         def upsert_market_indexes(self, rows):

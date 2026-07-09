@@ -327,7 +327,9 @@ def create_app() -> FastAPI:
         if hasattr(runtime.analysis_repository, "stock_research_snapshot"):
             snapshot = runtime.analysis_repository.stock_research_snapshot(symbol)
             if refresh_missing and _needs_enterprise_refresh(snapshot):
-                _enqueue_enterprise_on_demand_request(symbol)
+                refresh_result = _refresh_enterprise_on_demand(symbol)
+                snapshot = runtime.analysis_repository.stock_research_snapshot(symbol)
+                snapshot.setdefault("data_quality", {})["last_refresh"] = refresh_result
             return snapshot
         stock = next((row for row in runtime.analysis_repository.list_stocks() if row["symbol"] == symbol), None)
         if not stock:
@@ -544,6 +546,14 @@ def _needs_enterprise_refresh(snapshot: dict[str, Any]) -> bool:
     return not any(int((modules.get(key) or {}).get("rows") or 0) > 0 for key in watched_modules)
 
 
+def _refresh_enterprise_on_demand(symbol: str) -> dict:
+    pipeline = runtime.make_daily_pipeline()
+    return pipeline.run_enterprise_people_refresh(
+        requested_by=f"overview:on-demand:{symbol}",
+        symbol=symbol,
+    )
+
+
 def _list_sync_jobs() -> list[dict]:
     if hasattr(runtime.sync_repository, "list_jobs"):
         return runtime.sync_repository.list_jobs()
@@ -619,55 +629,6 @@ def _enqueue_sync_request(
         requested_by=requested_by,
         reason=reason,
     )
-
-
-def _enqueue_enterprise_on_demand_request(symbol: str) -> dict:
-    existing = _active_enterprise_on_demand_request(symbol)
-    if existing:
-        return existing
-    if _recent_enterprise_attempt(symbol):
-        return {
-            "request_type": "fundamental_refresh_pipeline",
-            "dataset": "stock_research_context",
-            "scope": {"symbols": [symbol]},
-            "status": "skipped_recent",
-            "reason": f"overview:on-demand:{symbol}",
-        }
-    return _enqueue_sync_request(
-        "fundamental_refresh_pipeline",
-        dataset="stock_research_context",
-        scope={"symbols": [symbol]},
-        priority=100,
-        reason=f"overview:on-demand:{symbol}",
-    )
-
-
-def _active_enterprise_on_demand_request(symbol: str) -> dict | None:
-    if not hasattr(runtime.sync_repository, "list_sync_requests"):
-        return None
-    for request in runtime.sync_repository.list_sync_requests(1000):
-        if request.get("status") not in {"pending", "claimed"}:
-            continue
-        if request.get("request_type") != "fundamental_refresh_pipeline":
-            continue
-        if request.get("reason") != f"overview:on-demand:{symbol}":
-            continue
-        if (request.get("scope") or {}).get("symbols") == [symbol]:
-            return request
-    return None
-
-
-def _recent_enterprise_attempt(symbol: str) -> bool:
-    if not hasattr(runtime.sync_repository, "get_dataset_freshness"):
-        return False
-    record = runtime.sync_repository.get_dataset_freshness("stock_research_context", symbol)
-    if not record:
-        return False
-    last_attempt = _parse_timestamp(record.get("last_attempt_at"))
-    if last_attempt is None:
-        return False
-    ttl_days = max(0, int(getattr(runtime.settings, "enterprise_refresh_ttl_days", 7)))
-    return datetime.now(timezone.utc) - last_attempt <= timedelta(days=ttl_days)
 
 
 def _parse_timestamp(value: Any) -> datetime | None:

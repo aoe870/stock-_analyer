@@ -23,7 +23,13 @@ def test_docker_compose_splits_api_and_collector_services():
     for mount in ["./stock_analyzer_app:/app/stock_analyzer_app", "./public:/app/public", "./db:/app/db"]:
         assert mount in api
         assert mount in collector
-    assert "STOCK_ANALYZER_MIANA_TOKEN" not in api
-    assert "STOCK_ANALYZER_TUSHARE_TOKEN" not in api
-    assert "STOCK_ANALYZER_MIANA_TOKEN" in collector
-    assert "STOCK_ANALYZER_TUSHARE_TOKEN" in collector
+    for key in [
+        "STOCK_ANALYZER_PROVIDER_PRIORITY",
+        "STOCK_ANALYZER_MIANA_TOKEN",
+        "STOCK_ANALYZER_MIANA_BASE_URL",
+        "STOCK_ANALYZER_MIANA_MAX_REQUESTS_PER_MINUTE",
+        "STOCK_ANALYZER_MIANA_REQUEST_TIMEOUT_SECONDS",
+        "STOCK_ANALYZER_TUSHARE_TOKEN",
+    ]:
+        assert key in api
+        assert key in collector

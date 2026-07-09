@@ -38,11 +38,13 @@ class MianaProvider:
         base_url: str = "https://miana.com.cn/api",
         http_get: Callable[[str, dict], dict] | None = None,
         max_requests_per_minute: int = 500,
+        request_timeout_seconds: int = 8,
     ) -> None:
         self.token = token
         self.base_url = base_url.rstrip("/")
         self.http_get = http_get
         self.max_requests_per_minute = max(1, int(max_requests_per_minute))
+        self.request_timeout_seconds = max(1, int(request_timeout_seconds))
         self._rate_limiter = _SlidingWindowRateLimiter(self.max_requests_per_minute)
         self._thread_local = threading.local()
 
@@ -460,7 +462,7 @@ class MianaProvider:
             payload = self.http_get(endpoint, params)
         else:
             url = f"{self.base_url}{endpoint}?{urlencode(request_params)}"
-            with urlopen(url, timeout=30) as response:  # noqa: S310 - URL is configured data provider endpoint.
+            with urlopen(url, timeout=self.request_timeout_seconds) as response:  # noqa: S310 - URL is configured data provider endpoint.
                 payload = json.loads(response.read().decode("utf-8"))
         self._append_raw_payload(
             {

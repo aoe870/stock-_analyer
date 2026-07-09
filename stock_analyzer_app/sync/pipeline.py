@@ -88,6 +88,24 @@ class DailySyncPipeline:
         except Exception as exc:
             return self.repository.finish_job(job["id"], "failed", {**summary, "error": str(exc)})
 
+    def run_enterprise_people_refresh(self, requested_by: str, symbol: str) -> dict:
+        provider_names = [provider.name for provider in self.providers]
+        job = self.repository.create_job("fundamental_refresh_pipeline", requested_by, provider_names)
+        self.repository.mark_job_running(job["id"])
+        summary = {"success": 0, "failed": 0, "metadata_errors": 0, "rows": 0}
+        try:
+            errors, rows = self._persist_enterprise_people_rows(symbol)
+            summary["metadata_errors"] += errors
+            summary["rows"] += rows
+            self._mark_fundamental_freshness(symbol, errors, rows)
+            status = "success" if errors == 0 else "completed_with_errors"
+            self.repository.add_item(job["id"], {"symbol": symbol, "status": status, "attempt_count": 1})
+            summary["success"] = 1
+            return self.repository.finish_job(job["id"], "completed" if rows else status, summary)
+        except Exception as exc:
+            self.repository.add_item(job["id"], {"symbol": symbol, "status": "failed", "attempt_count": len(self.providers), "error_message": str(exc)})
+            return self.repository.finish_job(job["id"], "failed", {**summary, "failed": 1, "error": str(exc)})
+
     def run_market_structure_pipeline(self, requested_by: str = "manual") -> dict:
         provider_names = [provider.name for provider in self.providers]
         job = self.repository.create_job("market_structure_pipeline", requested_by, provider_names)
@@ -274,6 +292,36 @@ class DailySyncPipeline:
                     row_count += len(rows)
             except Exception:  # noqa: BLE001 - one research endpoint should not block the whole stock.
                 error_count += 1
+        self._persist_raw_payloads()
+        return error_count, row_count
+
+    def _persist_enterprise_people_rows(self, symbol: str) -> tuple[int, int]:
+        row_count = 0
+        calls = [
+            ("fetch_top10_holders", "upsert_stock_top10_holders"),
+            ("fetch_company_officers", "upsert_stock_company_officers"),
+            ("fetch_officer_rewards", "upsert_stock_officer_rewards"),
+        ]
+        available_calls = [(fetch_name, persist_name) for fetch_name, persist_name in calls if hasattr(self.repository, persist_name)]
+        results: dict[str, list[dict]] = {}
+        error_count = 0
+        with ThreadPoolExecutor(max_workers=max(1, len(available_calls))) as executor:
+            future_map = {
+                executor.submit(self._fetch_first, fetch_name, symbol): persist_name
+                for fetch_name, persist_name in available_calls
+            }
+            for future in as_completed(future_map):
+                persist_name = future_map[future]
+                try:
+                    rows, _, _ = future.result()
+                    results[persist_name] = rows
+                except Exception:  # noqa: BLE001 - one people endpoint should not block the others.
+                    error_count += 1
+        for _, persist_name in available_calls:
+            rows = results.get(persist_name) or []
+            if rows:
+                getattr(self.repository, persist_name)(rows)
+                row_count += len(rows)
         self._persist_raw_payloads()
         return error_count, row_count
 

@@ -12,6 +12,26 @@ def test_miana_symbol_conversion_for_a_share_exchanges():
     assert normalized_symbol({"code": "430001", "exchangeCode": "BJSE"}) == "430001.BJ"
 
 
+def test_provider_chain_passes_miana_request_timeout_setting():
+    settings = AppSettings(
+        db=DatabaseSettings("127.0.0.1", 3306, "stock_analyzer", "u", "p"),
+        provider_priority=["miana"],
+        tushare_token="",
+        miana_token="token",
+        miana_base_url="https://miana.com.cn/api",
+        miana_request_timeout_seconds=6,
+        sync_enabled=True,
+        sync_time="18:30",
+        timezone="Asia/Shanghai",
+        log_level="INFO",
+    )
+
+    provider = build_provider_chain(settings).providers[0]
+
+    assert isinstance(provider, MianaProvider)
+    assert provider.request_timeout_seconds == 6
+
+
 def test_miana_provider_normalizes_stock_list_and_kline_rows():
     def fake_get(endpoint, params):
         if endpoint == "/stock/v1/stockList":

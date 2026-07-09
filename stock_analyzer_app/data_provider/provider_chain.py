@@ -24,6 +24,7 @@ def build_provider_chain(settings: AppSettings) -> ProviderChain:
                     settings.miana_token,
                     settings.miana_base_url,
                     max_requests_per_minute=settings.miana_max_requests_per_minute,
+                    request_timeout_seconds=settings.miana_request_timeout_seconds,
                 )
             )
         elif name == "tushare" and not settings.tushare_token:
